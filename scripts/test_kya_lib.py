@@ -122,11 +122,16 @@ class TypedDataTests(unittest.TestCase):
 
 
 class WalletBridgeTests(unittest.TestCase):
+    """直接 mock `_awp_wallet_exec` 来模拟 awp-wallet CLI 的 (returncode, stdout, stderr)。"""
+
+    def setUp(self) -> None:
+        os.environ.pop("AWP_WALLET_TOKEN", None)
+
     def test_sign_typed_data_returns_signature(self) -> None:
         with mock.patch.object(
             kya_lib,
-            "_awp_wallet_run",
-            return_value=json.dumps({"signature": SAMPLE_SIG}),
+            "_awp_wallet_exec",
+            return_value=(0, json.dumps({"signature": SAMPLE_SIG}), ""),
         ):
             sig = kya_lib.sign_typed_data({"any": "json"})
         self.assertEqual(sig, SAMPLE_SIG)
@@ -134,19 +139,127 @@ class WalletBridgeTests(unittest.TestCase):
     def test_sign_typed_data_dies_on_malformed_sig(self) -> None:
         with mock.patch.object(
             kya_lib,
-            "_awp_wallet_run",
-            return_value=json.dumps({"signature": "0xnotvalid"}),
+            "_awp_wallet_exec",
+            return_value=(0, json.dumps({"signature": "0xnotvalid"}), ""),
         ), self.assertRaises(SystemExit):
             kya_lib.sign_typed_data({"any": "json"})
 
     def test_get_wallet_address_uses_eoaAddress(self) -> None:
         with mock.patch.object(
             kya_lib,
-            "_awp_wallet_run",
-            return_value=json.dumps({"eoaAddress": SAMPLE_ADDR_MIXED}),
+            "_awp_wallet_exec",
+            return_value=(0, json.dumps({"eoaAddress": SAMPLE_ADDR_MIXED}), ""),
         ):
             addr = kya_lib.get_wallet_address()
         self.assertEqual(addr, SAMPLE_ADDR_MIXED.lower())
+
+
+class UnlockTests(unittest.TestCase):
+    """unlock + auto-retry 语义。"""
+
+    def setUp(self) -> None:
+        # 每个用例独立环境，避免 unlock 成功后 token 泄漏给下一个用例
+        os.environ.pop("AWP_WALLET_TOKEN", None)
+
+    def tearDown(self) -> None:
+        os.environ.pop("AWP_WALLET_TOKEN", None)
+
+    def test_unlock_wallet_parses_token_and_persists_env(self) -> None:
+        with mock.patch.object(
+            kya_lib,
+            "_awp_wallet_exec",
+            return_value=(0, json.dumps({"token": "tok-123"}), ""),
+        ) as patched:
+            token = kya_lib.unlock_wallet()
+        self.assertEqual(token, "tok-123")
+        self.assertEqual(os.environ.get("AWP_WALLET_TOKEN"), "tok-123")
+        # 确认传给 awp-wallet 的参数符合 awp-skill 约定
+        args = patched.call_args.args[0]
+        self.assertEqual(args[0], "unlock")
+        self.assertIn("--scope", args)
+        self.assertIn("transfer", args)
+        self.assertIn("--duration", args)
+        self.assertIn("3600", args)
+
+    def test_unlock_wallet_dies_on_non_zero_exit(self) -> None:
+        with mock.patch.object(
+            kya_lib,
+            "_awp_wallet_exec",
+            return_value=(1, "", "wallet not initialized"),
+        ), self.assertRaises(SystemExit):
+            kya_lib.unlock_wallet()
+
+    def test_sign_auto_unlocks_when_locked(self) -> None:
+        """第一次 sign-typed-data 报 "wallet is locked"，应自动 unlock 后重试成功。"""
+        call_log: list[list[str]] = []
+
+        def fake_exec(args: list[str], timeout: int = 60) -> tuple[int, str, str]:
+            call_log.append(list(args))
+            cmd = args[0]
+            if cmd == "sign-typed-data":
+                if "--token" in args:
+                    return (0, json.dumps({"signature": SAMPLE_SIG}), "")
+                return (1, "", "Error: wallet is locked; pass --token")
+            if cmd == "unlock":
+                return (0, json.dumps({"token": "fresh-tok"}), "")
+            return (1, "", f"unexpected cmd {cmd}")
+
+        with mock.patch.object(kya_lib, "_awp_wallet_exec", side_effect=fake_exec):
+            sig = kya_lib.sign_typed_data({"any": "json"})
+        self.assertEqual(sig, SAMPLE_SIG)
+
+        cmds = [c[0] for c in call_log]
+        self.assertEqual(cmds, ["sign-typed-data", "unlock", "sign-typed-data"])
+        # 第 3 次调用必须带上刚拿到的 token
+        self.assertIn("--token", call_log[2])
+        self.assertIn("fresh-tok", call_log[2])
+
+    def test_sign_does_not_retry_on_unrelated_error(self) -> None:
+        """非 token 问题（例如用户拒签）不应触发 unlock，避免掩盖真实错误。"""
+        call_log: list[list[str]] = []
+
+        def fake_exec(args: list[str], timeout: int = 60) -> tuple[int, str, str]:
+            call_log.append(list(args))
+            return (1, "", "user rejected signature request")
+
+        with mock.patch.object(
+            kya_lib, "_awp_wallet_exec", side_effect=fake_exec
+        ), self.assertRaises(SystemExit):
+            kya_lib.sign_typed_data({"any": "json"})
+        # 只应尝试一次，不重试
+        self.assertEqual(len(call_log), 1)
+
+    def test_sign_fails_after_unlock_fails(self) -> None:
+        """第一次 lock 错误 → unlock 又失败 → die（不要无限循环）。"""
+
+        def fake_exec(args: list[str], timeout: int = 60) -> tuple[int, str, str]:
+            cmd = args[0]
+            if cmd == "sign-typed-data":
+                return (1, "", "wallet is locked")
+            if cmd == "unlock":
+                return (1, "", "no wallet found")
+            return (1, "", "nope")
+
+        with mock.patch.object(
+            kya_lib, "_awp_wallet_exec", side_effect=fake_exec
+        ), self.assertRaises(SystemExit):
+            kya_lib.sign_typed_data({"any": "json"})
+
+    def test_sign_uses_existing_env_token_without_unlock(self) -> None:
+        """AWP_WALLET_TOKEN 已存在且 awp-wallet 接受时，不应触发 unlock。"""
+        os.environ["AWP_WALLET_TOKEN"] = "preset-tok"
+        call_log: list[list[str]] = []
+
+        def fake_exec(args: list[str], timeout: int = 60) -> tuple[int, str, str]:
+            call_log.append(list(args))
+            return (0, json.dumps({"signature": SAMPLE_SIG}), "")
+
+        with mock.patch.object(kya_lib, "_awp_wallet_exec", side_effect=fake_exec):
+            sig = kya_lib.sign_typed_data({"any": "json"})
+        self.assertEqual(sig, SAMPLE_SIG)
+        self.assertEqual(len(call_log), 1)
+        self.assertIn("--token", call_log[0])
+        self.assertIn("preset-tok", call_log[0])
 
 
 class HttpClientTests(unittest.TestCase):

@@ -101,28 +101,121 @@ def _awp_wallet_bin() -> str:
     return ""  # unreachable
 
 
-def _awp_wallet_run(args: list[str], timeout: int = 60) -> str:
-    """通用 awp-wallet 调用。失败时 die；成功返回 stdout 去尾空白。"""
+def _awp_wallet_exec(args: list[str], timeout: int = 60) -> tuple[int, str, str]:
+    """底层 awp-wallet 调用：返回 (returncode, stdout, stderr)，**不** die。
+
+    所有业务函数在此之上封装：成功走快速路径；失败时可按语义判断是否自动 unlock 重试。
+    """
     bin_path = _awp_wallet_bin()
     try:
         result = subprocess.run(
             [bin_path, *args], capture_output=True, text=True, timeout=timeout
         )
     except subprocess.TimeoutExpired:
-        die(f"awp-wallet {args[0]} timed out after {timeout}s")
-        return ""  # unreachable
-    if result.returncode != 0:
-        msg = result.stderr.strip() or result.stdout.strip() or "unknown error"
+        return 124, "", f"awp-wallet {args[0]} timed out after {timeout}s"
+    return result.returncode, result.stdout.strip(), result.stderr.strip()
+
+
+def _awp_wallet_run(args: list[str], timeout: int = 60) -> str:
+    """通用 awp-wallet 调用：失败时直接 die，成功返回 stdout。"""
+    code, out, err = _awp_wallet_exec(args, timeout=timeout)
+    if code != 0:
+        msg = err or out or "unknown error"
         die(f"awp-wallet {args[0]} failed: {msg}")
-    return result.stdout.strip()
+    return out
+
+
+# ── unlock / 自动重试 ───────────────────────────────────
+
+# 触发自动 unlock 的关键词（stderr 里出现任一即认为是"没 token / 锁了"）
+_LOCK_HINTS = (
+    "locked",
+    "unlocked",          # "wallet is not unlocked"
+    "unauthoriz",        # "unauthorized" / "unauthorised"
+    "token required",
+    "missing token",
+    "invalid token",
+    "session expired",
+    "no session",
+    "--token",
+)
+
+
+def _looks_like_lock_error(stderr: str, stdout: str) -> bool:
+    """启发式：只在 awp-wallet 提示"需要 token / session 失效"时才触发 unlock。"""
+    blob = f"{stderr}\n{stdout}".lower()
+    return any(h in blob for h in _LOCK_HINTS)
+
+
+def unlock_wallet(
+    *,
+    scope: str = "transfer",
+    duration_sec: int = 3600,
+    persist_env: bool = True,
+) -> str:
+    """调用 `awp-wallet unlock` 获取 session token。
+
+    - scope / duration 与 awp-skill 的约定一致（`--scope transfer --duration 3600`）。
+    - unlock 的 stdout 是 `{"token": "..."}`，解析失败就 die。
+    - persist_env=True 时顺便写入 AWP_WALLET_TOKEN，让同进程后续所有 awp-wallet 调用复用。
+    """
+    step("wallet.unlock", scope=scope, duration_sec=duration_sec)
+    code, out, err = _awp_wallet_exec(
+        ["unlock", "--scope", scope, "--duration", str(duration_sec)]
+    )
+    if code != 0:
+        msg = err or out or "unknown error"
+        die(
+            "awp-wallet unlock failed: "
+            f"{msg}. If your wallet is not initialized, run `awp-wallet init` first."
+        )
+    try:
+        token = json.loads(out).get("token", "")
+    except json.JSONDecodeError:
+        # 一些老版本支持 `unlock --raw` 直接打印 token；兼容一下
+        token = out if SIG_RE.pattern and out else ""
+    token = token.strip()
+    if not token:
+        die(f"awp-wallet unlock returned no token (stdout={out!r})")
+    if persist_env:
+        os.environ["AWP_WALLET_TOKEN"] = token
+    info("wallet unlocked", scope=scope)
+    return token
+
+
+def _call_with_autounlock(
+    args_with_token: list[str],
+    *,
+    token: Optional[str],
+    purpose: str,
+    timeout: int = 60,
+) -> str:
+    """先尝试用现有 token 跑命令；若命令提示"需要 token"则自动 unlock 重试一次。
+
+    `args_with_token` 是不含 `--token` 的参数列表；token 由本函数按状态拼进去。
+    """
+    attempt_token = token or os.environ.get("AWP_WALLET_TOKEN", "")
+    base_args: list[str] = list(args_with_token)
+    args_first = base_args + (["--token", attempt_token] if attempt_token else [])
+    code, out, err = _awp_wallet_exec(args_first, timeout=timeout)
+    if code == 0:
+        return out
+    if not _looks_like_lock_error(err, out):
+        msg = err or out or "unknown error"
+        die(f"awp-wallet {base_args[0]} failed during {purpose}: {msg}")
+
+    info("awp-wallet indicates wallet is locked; unlocking automatically", purpose=purpose)
+    fresh = unlock_wallet()
+    code, out, err = _awp_wallet_exec(base_args + ["--token", fresh], timeout=timeout)
+    if code != 0:
+        msg = err or out or "unknown error"
+        die(f"awp-wallet {base_args[0]} failed after unlock during {purpose}: {msg}")
+    return out
 
 
 def get_wallet_address(token: Optional[str] = None) -> str:
-    """读取 awp-wallet 当前 EOA 地址。"""
-    args = ["receive"]
-    if token:
-        args += ["--token", token]
-    out = _awp_wallet_run(args)
+    """读取 awp-wallet 当前 EOA 地址；wallet 被锁时自动 unlock。"""
+    out = _call_with_autounlock(["receive"], token=token, purpose="get_wallet_address")
     try:
         addr = json.loads(out).get("eoaAddress", "")
     except json.JSONDecodeError:
@@ -132,11 +225,12 @@ def get_wallet_address(token: Optional[str] = None) -> str:
 
 
 def sign_typed_data(typed_data: dict, token: Optional[str] = None) -> str:
-    """让 awp-wallet 对 EIP-712 typed-data 签名，返回 0x...130hex。"""
-    args = ["sign-typed-data", "--data", json.dumps(typed_data, separators=(",", ":"))]
-    if token:
-        args += ["--token", token]
-    out = _awp_wallet_run(args)
+    """让 awp-wallet 对 EIP-712 typed-data 签名；wallet 被锁时自动 unlock 后重试。返回 0x...130hex。"""
+    out = _call_with_autounlock(
+        ["sign-typed-data", "--data", json.dumps(typed_data, separators=(",", ":"))],
+        token=token,
+        purpose="sign_typed_data",
+    )
     try:
         sig = json.loads(out).get("signature", "")
     except json.JSONDecodeError:
@@ -450,7 +544,11 @@ def base_parser(description: str) -> argparse.ArgumentParser:
     parser.add_argument(
         "--token",
         default=os.environ.get("AWP_WALLET_TOKEN", ""),
-        help="awp-wallet session token (optional for newer wallet versions)",
+        help=(
+            "awp-wallet session token. Optional: newer awp-wallet versions don't need "
+            "it, and for older/locked wallets this skill will call `awp-wallet unlock` "
+            "automatically. Set AWP_WALLET_TOKEN env var to reuse a token."
+        ),
     )
     parser.add_argument(
         "--chain-id",

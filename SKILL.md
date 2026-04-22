@@ -103,6 +103,21 @@ the user only needs to paste a single GitHub URL plus environment variables.
 All scripts respect `--api-base` / `--chain-id` / `--token` to override env
 values per invocation.
 
+### Wallet unlock (no manual step needed)
+
+- **Newer `awp-wallet` (≥ v0.17.0)**: no unlock required — scripts just work.
+- **Older / locked `awp-wallet`**: this skill detects the "locked / token
+  required" error from `awp-wallet` and transparently runs
+  `awp-wallet unlock --scope transfer --duration 3600` for the current
+  process, then retries the failing command once. The resulting session
+  token is exported as `AWP_WALLET_TOKEN` for the rest of the run.
+- **Want to reuse an existing token?** Set `AWP_WALLET_TOKEN=<tok>` (or pass
+  `--token <tok>`) before invoking a script — the skill will use it first
+  and only auto-unlock if `awp-wallet` refuses it.
+- **What the skill will NEVER do**: ask for your password, paste a private
+  key, or touch `awp-wallet init` / keystore creation. Unlock happens only
+  via the official `awp-wallet` CLI, which owns the user-facing prompt.
+
 ## Scripts
 
 ### S1 · Twitter claim end-to-end — `scripts/sign-claim.py`

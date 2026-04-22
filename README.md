@@ -95,6 +95,20 @@ cd ~/.cursor/skills/kya-skill && git pull
 | `KYA_CHAIN_ID` | no | `8453` | EIP-712 domain `chainId` (Base mainnet) |
 | `AWP_WALLET_TOKEN` | no | — | only legacy `awp-wallet` versions need it |
 
+### Wallet lock? The skill handles it.
+
+If your `awp-wallet` is a legacy version (or just timed out its session),
+**you don't have to run `awp-wallet unlock` manually**. When a signing call
+returns a "locked / token required" error, the skill automatically runs
+`awp-wallet unlock --scope transfer --duration 3600`, caches the token in
+`AWP_WALLET_TOKEN` for the remainder of the process, and retries once.
+
+- Already have a token? Export `AWP_WALLET_TOKEN=<tok>` before the skill
+  runs — it will be used first, and auto-unlock only kicks in if the token
+  is rejected.
+- The skill never sees your password or private key. Unlock prompts happen
+  exclusively inside the official `awp-wallet` CLI.
+
 ---
 
 ## Scripts
@@ -106,7 +120,7 @@ cd ~/.cursor/skills/kya-skill && git pull
 | [`scripts/sign-action.py`](./scripts/sign-action.py) | Single-action signer: reads `--action / --agent / --timestamp / --nonce` (plus `--owner` for `kyc_init`), rebuilds KYA typed-data, prints the `0x` signature. Used by KYA web's Manual Sign dialog so users never copy a JSON blob. |
 | [`scripts/sign.py`](./scripts/sign.py) | Generic EIP-712 signer: any typed-data JSON → `0x` signature (fallback only) |
 | [`scripts/kya_lib.py`](./scripts/kya_lib.py) | Shared library: typed-data builders, `awp-wallet` bridge, KYA HTTP client |
-| [`scripts/test_kya_lib.py`](./scripts/test_kya_lib.py) | 16 unit tests for the shared lib, stdlib `unittest` |
+| [`scripts/test_kya_lib.py`](./scripts/test_kya_lib.py) | 22 unit tests for the shared lib (validation, typed-data, HTTP, poller, wallet bridge, unlock/auto-retry) |
 | [`scripts/test_sign_action.py`](./scripts/test_sign_action.py) | 7 subprocess tests for `sign-action.py`, use a fake `awp-wallet` on `PATH` |
 
 Read [`SKILL.md`](./SKILL.md) for the full command reference, magic-link
