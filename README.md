@@ -103,9 +103,11 @@ cd ~/.cursor/skills/kya-skill && git pull
 |---|---|
 | [`scripts/sign-claim.py`](./scripts/sign-claim.py) | Twitter claim end-to-end: sign prepare → print claim text → take tweet URL → sign claim → poll attestation |
 | [`scripts/sign-kyc.py`](./scripts/sign-kyc.py) | KYC initiation: sign `KycInit` → create Didit session → poll until terminal status |
-| [`scripts/sign.py`](./scripts/sign.py) | Generic EIP-712 signer: any typed-data JSON → `0x` signature |
+| [`scripts/sign-action.py`](./scripts/sign-action.py) | Single-action signer: reads `--action / --agent / --timestamp / --nonce` (plus `--owner` for `kyc_init`), rebuilds KYA typed-data, prints the `0x` signature. Used by KYA web's Manual Sign dialog so users never copy a JSON blob. |
+| [`scripts/sign.py`](./scripts/sign.py) | Generic EIP-712 signer: any typed-data JSON → `0x` signature (fallback only) |
 | [`scripts/kya_lib.py`](./scripts/kya_lib.py) | Shared library: typed-data builders, `awp-wallet` bridge, KYA HTTP client |
-| [`scripts/test_kya_lib.py`](./scripts/test_kya_lib.py) | 16 unit tests, stdlib `unittest` |
+| [`scripts/test_kya_lib.py`](./scripts/test_kya_lib.py) | 16 unit tests for the shared lib, stdlib `unittest` |
+| [`scripts/test_sign_action.py`](./scripts/test_sign_action.py) | 7 subprocess tests for `sign-action.py`, use a fake `awp-wallet` on `PATH` |
 
 Read [`SKILL.md`](./SKILL.md) for the full command reference, magic-link
 convention, and security notes.

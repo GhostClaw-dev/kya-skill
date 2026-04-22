@@ -152,9 +152,41 @@ If the user wants to do the Didit selfie + ID step elsewhere (different
 device), pass `--no-poll` so the script just prints the verification URL and
 exits — they can come back to KYA web later to see the final attestation.
 
-### S3 · Generic EIP-712 signer — `scripts/sign.py`
+### S3 · Single-action signer — `scripts/sign-action.py` **(preferred for wizard dialogs)**
 
-For any one-off KYA payload that doesn't fit S1/S2 (e.g. KYA web shows a
+KYA web's `/claim` and `/kyc` wizards throw a `ManualSignatureRequiredError`
+whenever the signer is in `manual` mode. The resulting dialog exposes a
+**Copy prompt** button that embeds every parameter needed to reproduce the
+wizard's typed-data (agent, nonce, timestamp, action — plus `owner` for
+`kyc_init`). The user no longer has to copy a JSON blob; this script
+rebuilds the typed-data from constants in `kya_lib` and asks
+`awp-wallet` to sign it.
+
+```bash
+# Twitter claim step (prepare or claim):
+python3 scripts/sign-action.py \
+  --action twitter_prepare \
+  --chain-id 8453 \
+  --agent 0xabc... \
+  --timestamp 1731000000 \
+  --nonce bfc412331f93ca46e9ab9eae9986d165
+
+# KYC init:
+python3 scripts/sign-action.py \
+  --action kyc_init \
+  --chain-id 8453 \
+  --agent 0xabc... \
+  --owner 0xdef... \
+  --timestamp 1731000000 \
+  --nonce bfc412331f93ca46e9ab9eae9986d165
+```
+
+Outputs only the `0x` signature on stdout (logs on stderr). The user pastes
+it back into KYA web's `03 Paste the 0x signature` field.
+
+### S4 · Generic EIP-712 signer — `scripts/sign.py`
+
+For any one-off KYA payload that doesn't fit S1 / S2 / S3 (e.g. KYA web shows a
 custom typed-data in the manual-sign dialog).
 
 ```bash
