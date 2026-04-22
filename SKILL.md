@@ -40,7 +40,7 @@ metadata:
         - AWP_WALLET_TOKEN    # optional; only needed by older awp-wallet versions
     primaryEnv: KYA_API_BASE
     emoji: "🪪"
-    homepage: https://github.com/awp-core/kya-skill
+    homepage: https://github.com/GhostClaw-dev/kya-skill
     security:
       wallet_bridge:
         no_direct_key_access: true   # Uses awp-wallet sign-typed-data, never raw keys
@@ -61,12 +61,30 @@ to the public KYA HTTP endpoints with valid signed headers.
 
 Run a script from this skill whenever:
 
+- The user pastes the URL `https://github.com/GhostClaw-dev/kya-skill` (or any
+  message that mentions "the kya skill from github") into chat. This is the
+  primary entry point — the KYA web "Skill mode · Copy prompt" button puts
+  exactly this URL on the user's clipboard. If the skill isn't installed
+  locally yet, run `git clone https://github.com/GhostClaw-dev/kya-skill
+  ~/.cursor/skills/kya-skill` first, then proceed.
 - The user is on the KYA web wizard (`/claim` or `/kyc`) and wants to skip
-  the **Manual sign with awp-wallet** dialog. The dialog should show a
+  the **Manual sign with awp-wallet** dialog. The dialog shows a
   one-click magic link / cursor prompt that resolves to one of the scripts
   here.
 - The user pastes a `kya-sign://` magic link in chat.
 - The user has KYA typed-data JSON and asks "please sign this with my wallet".
+
+### Self-bootstrap from a GitHub URL
+
+Cursor / Claude Code agents that don't have this skill installed should run:
+
+```bash
+git clone https://github.com/GhostClaw-dev/kya-skill ~/.cursor/skills/kya-skill
+```
+
+…and then re-read `SKILL.md` from the freshly cloned directory before
+executing any script. This is the fully recommended way to use the skill —
+the user only needs to paste a single GitHub URL plus environment variables.
 
 ## Requirements
 
