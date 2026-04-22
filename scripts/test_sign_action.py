@@ -29,67 +29,47 @@ FAKE_SIG = "0x" + "ab" * 65  # 130 hex chars
 
 
 def _write_fake_wallet(tmpdir: Path, dump_typed_to: Path) -> Path:
-    """在 tmpdir 里造一个名叫 awp-wallet 的脚本；受 PATH 前缀劫持后会被 subprocess 命中。
+    """在 tmpdir 里造一个名叫 awp-wallet 的可执行脚本；受 PATH 前缀劫持后会被 subprocess 命中。
 
-    脚本参数是 `sign-typed-data --data <json>`；它把拿到的 typed-data JSON 落盘，
-    然后吐一个合法 sig 出来。Windows 走 .cmd，*nix 走 shebang + chmod +x。
+    行为：若参数是 `sign-typed-data --data <json>`，把 JSON dump 到 dump_typed_to 后
+    打印一个合法签名 JSON；若是 `receive`，打印一个占位 eoaAddress。
+
+    实现：两个平台都用 Python 本体写一个小脚本；Windows 走 `.cmd` 让 PATH 正常命中，
+    *nix 走 shebang + chmod +x。同样的签名逻辑，避免 .cmd / .sh 双份实现。
     """
+    interpreter = sys.executable
+    # 被 fake 脚本内联调用的"逻辑"部分；dump_typed_to / FAKE_SIG 通过 f-string 硬编码，
+    # 避免跨进程传参的 quoting 陷阱。
+    body = textwrap.dedent(
+        f"""\
+        import json, sys
+        from pathlib import Path
+        args = sys.argv[1:]
+        if args and args[0] == "sign-typed-data":
+            if "--data" in args:
+                idx = args.index("--data") + 1
+                Path(r"{dump_typed_to}").write_text(args[idx], encoding="utf-8")
+            print(json.dumps({{"signature": "{FAKE_SIG}"}}))
+        elif args and args[0] == "receive":
+            print(json.dumps({{"eoaAddress": "0x{'11' * 20}"}}))
+        else:
+            sys.exit(2)
+        """
+    )
+
     if sys.platform.startswith("win"):
+        impl = tmpdir / "_awp_impl.py"
+        impl.write_text(body, encoding="utf-8")
         fake = tmpdir / "awp-wallet.cmd"
         fake.write_text(
-            textwrap.dedent(
-                rf"""
-                @echo off
-                setlocal enableextensions
-                rem 把 --data 后的那个参数原样 dump 到文件；cmd 复杂引号处理交给 python helper
-                python "{Path(__file__).parent / '_dump_typed.py'}" "{dump_typed_to}" %*
-                echo {{"signature":"{FAKE_SIG}"}}
-                """
-            ).lstrip(),
+            f'@echo off\r\n"{interpreter}" "{impl}" %*\r\n',
             encoding="utf-8",
         )
     else:
         fake = tmpdir / "awp-wallet"
-        fake.write_text(
-            textwrap.dedent(
-                f"""\
-                #!/usr/bin/env python3
-                import json, sys
-                from pathlib import Path
-                args = sys.argv[1:]
-                if args and args[0] == "sign-typed-data":
-                    idx = args.index("--data") + 1
-                    Path(r"{dump_typed_to}").write_text(args[idx], encoding="utf-8")
-                    print(json.dumps({{"signature": "{FAKE_SIG}"}}))
-                elif args and args[0] == "receive":
-                    print(json.dumps({{"eoaAddress": "0x{'11' * 20}"}}))
-                else:
-                    sys.exit(2)
-                """
-            ),
-            encoding="utf-8",
-        )
+        fake.write_text(f"#!{interpreter}\n{body}", encoding="utf-8")
         fake.chmod(fake.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
     return fake
-
-
-# Windows 版 awp-wallet.cmd 依赖这个 helper 来解析 --data 参数
-DUMP_HELPER = Path(__file__).parent / "_dump_typed.py"
-if sys.platform.startswith("win") and not DUMP_HELPER.exists():
-    DUMP_HELPER.write_text(
-        textwrap.dedent(
-            """\
-            import sys
-            from pathlib import Path
-            dump_to = sys.argv[1]
-            args = sys.argv[2:]
-            if "--data" in args:
-                idx = args.index("--data") + 1
-                Path(dump_to).write_text(args[idx], encoding="utf-8")
-            """
-        ),
-        encoding="utf-8",
-    )
 
 
 def _run(env_path: str, tmp: Path, extra_args: list[str]) -> subprocess.CompletedProcess:

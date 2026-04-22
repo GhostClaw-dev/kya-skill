@@ -1,4 +1,6 @@
 __pycache__/
+scripts/_awp_impl.py
+scripts/_dump_typed.py
 *.py[cod]
 *.egg-info/
 .venv/
