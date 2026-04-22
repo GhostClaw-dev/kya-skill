@@ -1,6 +1,6 @@
 # kya-skill
 
-> Sign and submit [KYA (Know Your Agent)](https://kya.awp.network) attestations
+> Sign and submit [KYA (Know Your Agent)](https://kya.link) attestations
 > from your IDE. No more copying EIP-712 JSON between browser and terminal.
 
 [![tests](https://img.shields.io/badge/tests-16%20passing-brightgreen)](./scripts/test_kya_lib.py)
@@ -24,7 +24,7 @@ git clone https://github.com/GhostClaw-dev/kya-skill ~/.cursor/skills/kya-skill
 
 Then run:
 
-KYA_API_BASE=https://kya.awp.network \
+KYA_API_BASE=https://kya.link \
 python3 ~/.cursor/skills/kya-skill/scripts/sign-claim.py
 ```
 
@@ -86,11 +86,11 @@ cd ~/.cursor/skills/kya-skill && git pull
 
 - **`python3` 3.9+** (stdlib only, no `pip install` required)
 - **[`awp-wallet`](https://github.com/awp-core/awp-wallet) CLI** on `PATH`
-- A KYA endpoint reachable from your machine (default `https://kya.awp.network`)
+- A KYA endpoint reachable from your machine (default `https://kya.link`)
 
 | Env var | Required | Default | Notes |
 |---|---|---|---|
-| `KYA_API_BASE` | for claim flows | — | e.g. `https://kya.awp.network` |
+| `KYA_API_BASE` | for claim flows | — | e.g. `https://kya.link` |
 | `KYA_KYC_BASE` | for KYC flow | — | usually same host as `KYA_API_BASE` |
 | `KYA_CHAIN_ID` | no | `8453` | EIP-712 domain `chainId` (Base mainnet) |
 | `AWP_WALLET_TOKEN` | no | — | only legacy `awp-wallet` versions need it |

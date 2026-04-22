@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """KYA Twitter Claim — sign + prepare + (post tweet) + claim + poll, end-to-end.
 
 This is the "lean B+" flow: the user copies a magic link from KYA web, runs this
@@ -17,7 +17,7 @@ JSON / signature copy-paste:
 
 Examples:
   # Interactive: tells user to publish tweet and paste URL
-  KYA_API_BASE=https://kya.awp.network python3 sign-claim.py
+  KYA_API_BASE=https://kya.link python3 sign-claim.py
 
   # Headless (already published the tweet):
   python3 sign-claim.py --tweet-url https://x.com/me/status/123 --agent 0xabc...

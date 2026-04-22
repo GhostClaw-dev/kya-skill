@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """KYA helper library — shared utilities for kya-skill scripts.
 
 KYA (Know Your Agent) skill 与 awp-skill 完全独立，但复用了相同的
@@ -248,7 +248,7 @@ def _kya_base() -> str:
     if not base:
         die(
             "KYA_API_BASE environment variable not set. Example: "
-            "export KYA_API_BASE=https://kya.awp.network"
+            "export KYA_API_BASE=https://kya.link"
         )
     return base
 
@@ -391,7 +391,7 @@ def _kyc_base() -> str:
     if not base:
         die(
             "KYA_KYC_BASE environment variable not set. Example: "
-            "export KYA_KYC_BASE=https://kya.awp.network"
+            "export KYA_KYC_BASE=https://kya.link"
         )
     return base
 

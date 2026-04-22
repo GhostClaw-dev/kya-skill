@@ -1,4 +1,4 @@
----
+﻿---
 name: kya
 version: 0.1.0
 description: >
@@ -34,7 +34,7 @@ metadata:
       anyBins:
         - awp-wallet
       env:
-        - KYA_API_BASE        # required for kya-claim flows; e.g. https://kya.awp.network
+        - KYA_API_BASE        # required for kya-claim flows; e.g. https://kya.link
         - KYA_KYC_BASE        # required for kya-kyc flows
         - KYA_CHAIN_ID        # optional; default 8453 (Base mainnet)
         - AWP_WALLET_TOKEN    # optional; only needed by older awp-wallet versions
@@ -95,7 +95,7 @@ the user only needs to paste a single GitHub URL plus environment variables.
 
   | Variable | Required | Default | Notes |
   |---|---|---|---|
-  | `KYA_API_BASE` | for claim flows | — | e.g. `https://kya.awp.network` |
+  | `KYA_API_BASE` | for claim flows | — | e.g. `https://kya.link` |
   | `KYA_KYC_BASE` | for KYC flow | — | usually same host as `KYA_API_BASE` |
   | `KYA_CHAIN_ID` | no | `8453` | EIP-712 domain `chainId` (Base mainnet) |
   | `AWP_WALLET_TOKEN` | no | — | only legacy awp-wallet versions need it |
@@ -113,7 +113,7 @@ and polls until active.
 
 ```bash
 # Interactive (prints claim text, waits for tweet URL on stdin):
-KYA_API_BASE=https://kya.awp.network \
+KYA_API_BASE=https://kya.link \
 python3 scripts/sign-claim.py
 
 # Headless (already published the tweet):
@@ -144,7 +144,7 @@ polls the kyc-service until the session reaches a terminal status (Approved /
 Declined / Abandoned / Expired).
 
 ```bash
-KYA_KYC_BASE=https://kya.awp.network \
+KYA_KYC_BASE=https://kya.link \
 python3 scripts/sign-kyc.py --owner 0xowner...
 ```
 
@@ -185,7 +185,7 @@ KYA web encodes the user's intent as `kya-sign://<flow>?<query>`:
 When the user pastes such a URL in chat, this skill should:
 
 1. Confirm the action with the user (one short sentence: "About to claim X
-   account for agent `0xabc…` against `https://kya.awp.network`. Proceed?").
+   account for agent `0xabc…` against `https://kya.link`. Proceed?").
 2. Run the matching script with the encoded args.
 3. Stream progress from stderr; report the final stdout JSON line back to
    the user.

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """KYA KYC initiation — sign + create session + open Didit + poll.
 
 This handles only the *initiation* part of the KYC flow that absolutely needs
@@ -9,7 +9,7 @@ user opens it in any browser, completes the Didit flow, and the script polls
 until the session reaches a terminal status.
 
 Examples:
-  KYA_KYC_BASE=https://kya.awp.network python3 sign-kyc.py
+  KYA_KYC_BASE=https://kya.link python3 sign-kyc.py
   python3 sign-kyc.py --owner 0xowner... --agent 0xagent... --no-poll
 """
 
