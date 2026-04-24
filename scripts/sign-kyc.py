@@ -112,7 +112,7 @@ def main() -> None:
     step("kyc.session_created", session_id=session_id)
 
     print("\n────── KYC verification ──────", flush=True)
-    print(f"Open this URL in any browser to complete Didit:", flush=True)
+    print("Open this URL in any browser to complete Didit:", flush=True)
     print(verification_url, flush=True)
     print("──────────────────────────────", flush=True)
 
