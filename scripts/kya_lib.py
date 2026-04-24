@@ -172,8 +172,8 @@ def unlock_wallet(
     try:
         token = json.loads(out).get("token", "")
     except json.JSONDecodeError:
-        # 一些老版本支持 `unlock --raw` 直接打印 token；兼容一下
-        token = out if SIG_RE.pattern and out else ""
+        # awp-wallet emits JSON-only now; no legacy text fallback
+        token = ""
     token = token.strip()
     if not token:
         die(f"awp-wallet unlock returned no token (stdout={out!r})")
