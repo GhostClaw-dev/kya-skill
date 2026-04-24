@@ -28,7 +28,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from typing import Any, Optional
+from typing import Any, NoReturn, Optional
 
 # ── 常量 ────────────────────────────────────────────────
 
@@ -61,7 +61,7 @@ def step(name: str, **fields: Any) -> None:
     print(json.dumps(payload, ensure_ascii=False), file=sys.stderr, flush=True)
 
 
-def die(msg: str, code: int = 1) -> "NoReturn":  # type: ignore[name-defined]
+def die(msg: str, code: int = 1) -> NoReturn:
     """打印错误并退出。"""
     print(json.dumps({"error": msg}, ensure_ascii=False), file=sys.stderr, flush=True)
     sys.exit(code)
