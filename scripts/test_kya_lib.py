@@ -363,5 +363,127 @@ class PollerTests(unittest.TestCase):
         self.assertIsNone(result)
 
 
+class AwpRelayTypedDataTests(unittest.TestCase):
+    """AWP relayer 三件套 typed-data + nonce + relay HTTP 客户端的契约测试。
+
+    EIP-712 字段顺序、类型字符串必须跟 web/lib/awpRelay.ts 完全一致,
+    否则 relayer 会拒签;这里把"对齐"当成硬测试,避免 typo 静默漂移。
+    """
+
+    def test_set_recipient_typed_data_shape(self) -> None:
+        td = kya_lib.build_awp_set_recipient_typed_data(
+            user_address=SAMPLE_ADDR,
+            recipient_address=SAMPLE_OWNER,
+            nonce=7,
+            deadline=1_700_000_000,
+            chain_id=8453,
+        )
+        self.assertEqual(td["primaryType"], "SetRecipient")
+        self.assertEqual(
+            td["domain"],
+            {
+                "name": "AWPRegistry",
+                "version": "1",
+                "chainId": 8453,
+                "verifyingContract": kya_lib.AWP_REGISTRY_ADDRESS,
+            },
+        )
+        self.assertEqual(
+            td["types"]["SetRecipient"],
+            [
+                {"name": "user", "type": "address"},
+                {"name": "recipient", "type": "address"},
+                {"name": "nonce", "type": "uint256"},
+                {"name": "deadline", "type": "uint256"},
+            ],
+        )
+        # uint256 字段统一字符串化(awp-wallet 期望)
+        self.assertEqual(td["message"]["nonce"], "7")
+        self.assertEqual(td["message"]["deadline"], "1700000000")
+
+    def test_grant_delegate_typed_data_shape(self) -> None:
+        td = kya_lib.build_awp_grant_delegate_typed_data(
+            user_address=SAMPLE_ADDR,
+            delegate_address=SAMPLE_OWNER,
+            nonce=0,
+            deadline=1,
+            chain_id=8453,
+        )
+        self.assertEqual(td["primaryType"], "GrantDelegate")
+        self.assertEqual(
+            td["types"]["GrantDelegate"],
+            [
+                {"name": "user", "type": "address"},
+                {"name": "delegate", "type": "address"},
+                {"name": "nonce", "type": "uint256"},
+                {"name": "deadline", "type": "uint256"},
+            ],
+        )
+        self.assertEqual(td["domain"]["verifyingContract"], kya_lib.AWP_REGISTRY_ADDRESS)
+
+    def test_eth_call_nonces_parses_hex_result(self) -> None:
+        captured: dict = {}
+
+        def fake_request(method, url, *, headers=None, body=None, timeout=20):  # noqa: ARG001
+            captured.update(method=method, url=url, body=body)
+            return 200, {"jsonrpc": "2.0", "id": 1, "result": "0x000000000000000000000000000000000000000000000000000000000000002a"}
+
+        with mock.patch.object(kya_lib, "_http_request", side_effect=fake_request):
+            n = kya_lib._eth_call_nonces(SAMPLE_ADDR)
+
+        self.assertEqual(n, 42)
+        # selector(`nonces(address)`) = 0x7ecebe00,后跟 32 字节 padding 的地址
+        data = captured["body"]["params"][0]["data"]
+        self.assertTrue(data.startswith("0x7ecebe00"))
+        self.assertTrue(data.endswith(SAMPLE_ADDR.replace("0x", "")))
+
+    def test_relay_set_recipient_posts_expected_body(self) -> None:
+        captured: dict = {}
+
+        def fake_request(method, url, *, headers=None, body=None, timeout=20):  # noqa: ARG001
+            captured.update(method=method, url=url, body=body)
+            return 200, {"txHash": "0x" + "ab" * 32, "status": "submitted"}
+
+        with mock.patch.object(kya_lib, "_http_request", side_effect=fake_request):
+            res = kya_lib.relay_set_recipient(
+                user_address=SAMPLE_ADDR,
+                recipient_address=SAMPLE_OWNER,
+                deadline=1_700_000_000,
+                signature=SAMPLE_SIG,
+                chain_id=8453,
+            )
+
+        self.assertEqual(captured["method"], "POST")
+        self.assertTrue(captured["url"].endswith("/api/relay/set-recipient"))
+        self.assertEqual(captured["body"]["chainId"], 8453)
+        self.assertEqual(captured["body"]["user"], SAMPLE_ADDR)
+        self.assertEqual(captured["body"]["recipient"], SAMPLE_OWNER)
+        self.assertEqual(captured["body"]["deadline"], "1700000000")
+        self.assertEqual(captured["body"]["signature"], SAMPLE_SIG)
+        self.assertEqual(res["status"], "submitted")
+
+    def test_relay_set_recipient_rejects_bad_signature(self) -> None:
+        with self.assertRaises(SystemExit):
+            kya_lib.relay_set_recipient(
+                user_address=SAMPLE_ADDR,
+                recipient_address=SAMPLE_OWNER,
+                deadline=1,
+                signature="0xnope",
+            )
+
+    def test_relay_stake_submit_blocks_untrusted_url(self) -> None:
+        # AWP relayer 返回的 submitTo.url 必须落在 AWP_RELAY_BASE 域内,
+        # 否则会被脚本拒绝(防 SSRF / 钓鱼 URL)。
+        os.environ["AWP_RELAY_BASE"] = "https://api.awp.sh"
+        try:
+            with self.assertRaises(SystemExit):
+                kya_lib.relay_stake_submit(
+                    {"method": "POST", "url": "https://evil.example.com/relay", "body": {}},
+                    SAMPLE_SIG,
+                )
+        finally:
+            os.environ.pop("AWP_RELAY_BASE", None)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

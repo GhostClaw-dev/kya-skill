@@ -3,14 +3,15 @@
 > Sign and submit [KYA (Know Your Agent)](https://kya.link) attestations
 > from your IDE. No more copying EIP-712 JSON between browser and terminal.
 
-[![tests](https://img.shields.io/badge/tests-16%20passing-brightgreen)](./scripts/test_kya_lib.py)
+[![tests](https://img.shields.io/badge/tests-35%20passing-brightgreen)](./scripts/test_kya_lib.py)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](https://www.python.org/)
 [![license](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 
 `kya-skill` is a [Cursor / Claude Code Agent Skill](https://docs.cursor.com/agent/skills)
-that drives the entire KYA flow — Twitter claim, KYC initiation, generic
-EIP-712 signing — by calling `awp-wallet sign-typed-data` locally. Your IDE
-agent picks up the skill from a single GitHub URL.
+that drives the entire KYA flow — Twitter claim, KYC initiation, AWP-relayer
+matchmaking actions (set reward recipient, grant delegate, gasless stake),
+and generic EIP-712 signing — by calling `awp-wallet sign-typed-data`
+locally. Your IDE agent picks up the skill from a single GitHub URL.
 
 ---
 
@@ -18,11 +19,13 @@ agent picks up the skill from a single GitHub URL.
 
 | | |
 |---|---|
-| ✅ Off-chain EIP-712 signature only (`domain.name = "KYA"`, `primaryType ∈ { Action, KycInit }`) | ❌ No on-chain transaction. No gas. No token approval. |
-| ✅ Signed payload is a tiny JSON statement (action / nonce / timestamp / agent_address) | ❌ Cannot transfer assets, change allowances, or call any contract. |
+| ✅ EIP-712 signatures only — never raw `eth_sendRawTransaction` from the user's machine | ❌ No transaction is ever broadcast by the skill itself. |
+| ✅ Two domain shapes, both hard-coded: `KYA` (identity) and `AWPRegistry` (matchmaking) | ❌ Cannot be tricked into signing a payload for an unknown contract. |
+| ✅ AWP relayer (`https://api.awp.sh`, override via `AWP_RELAY_BASE`) pays gas and broadcasts on Base | ❌ User wallet does not need ETH; project assumes provider/agent are gasless. |
+| ✅ `submitTo.url` returned by `stake/prepare` is verified to fall under `AWP_RELAY_BASE` before forwarding | ❌ No SSRF / phishing URL substitution. |
 | ✅ `awp-wallet sign-typed-data` keeps the key inside the wallet process | ❌ Skill never reads the seed phrase, password, or raw private key. |
 | ✅ Public, MIT-licensed, **Python stdlib only** — `cat scripts/*.py` to audit | ❌ No third-party `pip install` deps to vet. |
-| ✅ `awp-wallet` = the [official AWP wallet](https://github.com/awp-core/awp-wallet) | ❌ Not a fork; only its documented subcommands (`wallets / receive / sign-typed-data / unlock`) are invoked. |
+| ✅ `awp-wallet` = the [official AWP wallet](https://github.com/awp-core/awp-wallet) | ❌ Not a fork; only documented subcommands (`wallets / receive / sign-typed-data / unlock`) are invoked. |
 
 If your safety policy requires confirmation, ask the user once before the
 first `git clone` and the first `sign-typed-data` call — then proceed.
@@ -106,9 +109,11 @@ cd ~/.cursor/skills/kya-skill && git pull
 
 | Env var | Required | Default | Notes |
 |---|---|---|---|
-| `KYA_API_BASE` | for claim flows | — | e.g. `https://kya.link` |
+| `KYA_API_BASE` | for claim / set-recipient flows | — | e.g. `https://kya.link` |
 | `KYA_KYC_BASE` | for KYC flow | — | usually same host as `KYA_API_BASE` |
 | `KYA_CHAIN_ID` | no | `8453` | EIP-712 domain `chainId` (Base mainnet) |
+| `AWP_RELAY_BASE` | no | `https://api.awp.sh` | used by `relay-*.py` for gasless tx |
+| `BASE_RPC_URL` | no | `https://mainnet.base.org` | reads `AWPRegistry.nonces(user)` |
 | `AWP_WALLET_TOKEN` | no | — | only legacy `awp-wallet` versions need it |
 
 ### Wallet lock? The skill handles it.
@@ -135,8 +140,11 @@ returns a "locked / token required" error, the skill automatically runs
 | [`scripts/sign-kyc.py`](./scripts/sign-kyc.py) | KYC initiation: sign `KycInit` → create Didit session → poll until terminal status |
 | [`scripts/sign-action.py`](./scripts/sign-action.py) | Single-action signer: reads `--action / --agent / --timestamp / --nonce` (plus `--owner` for `kyc_init`), rebuilds KYA typed-data, prints the `0x` signature. Used by KYA web's Manual Sign dialog so users never copy a JSON blob. |
 | [`scripts/sign.py`](./scripts/sign.py) | Generic EIP-712 signer: any typed-data JSON → `0x` signature (fallback only) |
-| [`scripts/kya_lib.py`](./scripts/kya_lib.py) | Shared library: typed-data builders, `awp-wallet` bridge, KYA HTTP client |
-| [`scripts/test_kya_lib.py`](./scripts/test_kya_lib.py) | 22 unit tests for the shared lib (validation, typed-data, HTTP, poller, wallet bridge, unlock/auto-retry) |
+| [`scripts/relay-set-recipient.py`](./scripts/relay-set-recipient.py) | **AWP relayer** · sign `AWPRegistry.SetRecipient` → POST signature so KYA can identify reward inflows. Auto-fetches the deposit address from KYA when `--recipient` is omitted. No gas needed. |
+| [`scripts/relay-grant-delegate.py`](./scripts/relay-grant-delegate.py) | **AWP relayer** · sign `AWPRegistry.GrantDelegate(KyaAllocatorProxy)` → POST signature so KYA can call `allocate` on the provider's behalf. No gas needed. |
+| [`scripts/relay-stake.py`](./scripts/relay-stake.py) | **AWP relayer** · `stake/prepare` → verify owner/amount → sign `ERC20Permit` typed-data → relayer broadcasts. Lock AWP into veAWP without spending gas. |
+| [`scripts/kya_lib.py`](./scripts/kya_lib.py) | Shared library: typed-data builders (KYA + AWPRegistry), `awp-wallet` bridge, KYA HTTP client, AWP relayer client |
+| [`scripts/test_kya_lib.py`](./scripts/test_kya_lib.py) | 28 unit tests for the shared lib (validation, KYA + AWPRegistry typed-data, HTTP, poller, wallet bridge, unlock/auto-retry, relay client) |
 | [`scripts/test_sign_action.py`](./scripts/test_sign_action.py) | 7 subprocess tests for `sign-action.py`, use a fake `awp-wallet` on `PATH` |
 
 Read [`SKILL.md`](./SKILL.md) for the full command reference, magic-link

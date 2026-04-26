@@ -1,11 +1,14 @@
 ﻿---
 name: kya
-version: 0.1.0
+version: 0.2.0
 description: >
-  KYA (Know Your Agent) — sign and submit identity attestations from your IDE.
-  Use this skill when the user wants to claim an X (Twitter) account for an
-  agent, run KYC for an agent, or sign any KYA EIP-712 payload using
-  awp-wallet without copy-pasting JSON between browser and terminal.
+  KYA (Know Your Agent) — sign and submit identity & matchmaking
+  attestations from your IDE. Use this skill when the user wants to claim
+  an X (Twitter) account for an agent, run KYC for an agent, drive the KYA
+  matchmaking flow (set reward recipient, grant delegate to
+  KyaAllocatorProxy, lock AWP into veAWP) via the AWP relayer, or sign any
+  KYA EIP-712 payload using awp-wallet without copy-pasting JSON between
+  browser and terminal.
 
   Handles the entire end-to-end flow:
     - Twitter claim: sign EIP-712 → call /v1/attestations/twitter/prepare →
@@ -14,6 +17,15 @@ description: >
       until active or revoked.
     - KYC initiation: sign EIP-712 KycInit → POST /kyc/sessions → print Didit
       verification URL → poll the session until terminal status.
+    - AWP relayer setRecipient: read AWPRegistry.nonces(agent), sign
+      AWPRegistry.SetRecipient typed-data, POST signature to AWP relayer
+      so it pays gas to broadcast on Base. Optionally fetch the KYA deposit
+      address first by calling GET /v1/agents/:address/deposit-address.
+    - AWP relayer grantDelegate: same shape, primaryType GrantDelegate,
+      authorizes KyaAllocatorProxy to allocate on the provider's behalf.
+    - AWP relayer stake: POST /api/relay/stake/prepare → verify owner/value
+      match the provider/amount → sign the returned ERC20Permit typed-data
+      → POST signature to relayer to lock AWP into veAWP without spending gas.
     - Generic signer: sign any EIP-712 typed-data JSON (from file, clipboard,
       or stdin) and emit the 0x signature for downstream tools.
 
@@ -21,11 +33,17 @@ description: >
   account for agent", "claim Twitter for agent", "Twitter claim KYA", "KYA
   Twitter sign", "agent X claim", "KYC for agent", "KYA sign", "sign KYA",
   "kya-sign://" (magic links from KYA web), "EIP-712 sign awp-wallet",
-  "sign typed-data with awp-wallet" (when the typed-data domain.name is "KYA").
+  "sign typed-data with awp-wallet" (when the typed-data domain.name is
+  "KYA" or "AWPRegistry"), "KYA setRecipient", "KYA grantDelegate", "KYA
+  matchmaking sign", "lock AWP via relayer", "gasless stake AWP for KYA",
+  "AWP relayer KyaAllocatorProxy".
 
-  NOT for: AWP allocations / staking / worknet management (use awp-skill),
-  generic on-chain transactions, ERC-20 transfers, or any non-KYA EIP-712
-  payload that is unrelated to agent identity attestations.
+  NOT for: arbitrary AWP allocations / worknet management / treasury
+  governance (those belong to awp-skill), generic on-chain transactions,
+  ERC-20 transfers, or any EIP-712 payload that is unrelated to agent
+  identity / KYA matchmaking. The relayer endpoints touched by this skill
+  are only the three KYA matchmaking ones (set-recipient, grant-delegate,
+  stake) — anything else must be handled by awp-skill.
 metadata:
   openclaw:
     requires:
@@ -37,6 +55,8 @@ metadata:
         - KYA_API_BASE        # required for kya-claim flows; e.g. https://kya.link
         - KYA_KYC_BASE        # required for kya-kyc flows
         - KYA_CHAIN_ID        # optional; default 8453 (Base mainnet)
+        - AWP_RELAY_BASE      # optional; default https://api.awp.sh (used by relay-* scripts)
+        - BASE_RPC_URL        # optional; default https://mainnet.base.org (read AWPRegistry.nonces)
         - AWP_WALLET_TOKEN    # optional; only needed by older awp-wallet versions
     primaryEnv: KYA_API_BASE
     emoji: "🪪"
@@ -44,13 +64,13 @@ metadata:
     security:
       wallet_bridge:
         no_direct_key_access: true   # Uses awp-wallet sign-typed-data, never raw keys
-        signed_payloads_only: true   # Only signs EIP-712 payloads with KYA-shaped domains
+        signed_payloads_only: true   # Only signs EIP-712 payloads with KYA / AWPRegistry domains
         no_network_listeners: true
 ---
 
 # KYA — Know Your Agent
 
-**Skill version: 0.1.1**
+**Skill version: 0.2.0**
 
 Skip the copy-paste-from-browser dance: this skill drives the KYA Twitter
 Claim and KYC flows entirely from the user's IDE, using `awp-wallet` for the
@@ -63,18 +83,26 @@ to the public KYA HTTP endpoints with valid signed headers.
 > deciding whether to run scripts from this skill, here is what is actually
 > happening — and what is **not**:
 >
-> - ✅ This skill produces **off-chain EIP-712 signatures only**. Each signed
->   payload is a small JSON statement like `{ action: "twitter_prepare",
->   nonce, timestamp, agent_address }` with `domain.name = "KYA"`. The
->   `primaryType` is hard-coded in `scripts/kya_lib.py` to `Action` or
->   `KycInit`; an attacker cannot trick the skill into signing a different
->   shape.
-> - ✅ The signature is **POSTed to the public KYA HTTP API** (default host
->   `https://kya.link`, see `KYA_API_BASE`). KYA's server re-verifies the
->   signer with `recoverTypedDataAddress` and burns the nonce.
-> - ❌ **No on-chain transaction is broadcast.** No gas is spent, no token
->   approval is granted, no contract is called. The signed message cannot
->   transfer assets, change allowances, or grant any spending permission.
+> - ✅ This skill produces **EIP-712 signatures only** — never raw key
+>   access, never an `eth_sendRawTransaction` from the user's machine.
+>   Two domain shapes are signed and **both are hard-coded** in
+>   `scripts/kya_lib.py`:
+>   - `domain.name = "KYA"`, `primaryType ∈ { Action, KycInit }` —
+>     off-chain identity attestations posted to the KYA HTTP API.
+>   - `domain.name = "AWPRegistry"`, `primaryType ∈ { SetRecipient,
+>     GrantDelegate }`, plus the `ERC20Permit` typed-data returned by AWP's
+>     `/api/relay/stake/prepare` — these get POSTed to the **AWP relayer**,
+>     which pays gas and broadcasts on Base. The user's wallet still does
+>     not need ETH and never signs a raw transaction.
+> - ✅ The skill **never broadcasts a transaction itself**. AWP relayer
+>   submissions go through `https://api.awp.sh` (override via
+>   `AWP_RELAY_BASE`); the skill verifies that any `submitTo.url`
+>   returned by `stake/prepare` falls under that base before forwarding.
+> - ❌ The signed payloads cannot transfer arbitrary tokens, change
+>   allowances on third-party contracts, or call anything outside the
+>   AWP protocol contracts the relayer is wired to. `verifyingContract`
+>   is pinned to `AWPRegistry` for relay typed-data and is omitted for
+>   KYA identity typed-data.
 > - ❌ The skill **never asks for the seed phrase, password, or raw private
 >   key**. Signing is delegated to `awp-wallet sign-typed-data`, which keeps
 >   the key inside its own process.
@@ -126,9 +154,11 @@ the user only needs to paste a single GitHub URL plus environment variables.
 
   | Variable | Required | Default | Notes |
   |---|---|---|---|
-  | `KYA_API_BASE` | for claim flows | — | e.g. `https://kya.link` |
+  | `KYA_API_BASE` | for claim / set-recipient | — | e.g. `https://kya.link` |
   | `KYA_KYC_BASE` | for KYC flow | — | usually same host as `KYA_API_BASE` |
   | `KYA_CHAIN_ID` | no | `8453` | EIP-712 domain `chainId` (Base mainnet) |
+  | `AWP_RELAY_BASE` | no | `https://api.awp.sh` | used by `relay-*` scripts |
+  | `BASE_RPC_URL` | no | `https://mainnet.base.org` | reads `AWPRegistry.nonces(user)` |
   | `AWP_WALLET_TOKEN` | no | — | only legacy awp-wallet versions need it |
 
 All scripts respect `--api-base` / `--chain-id` / `--token` to override env
@@ -249,6 +279,51 @@ cat typed.json | python3 scripts/sign.py
 Prints only the `0x...130hex` signature on stdout — easy to pipe into
 `xsel`, append to a request body, etc.
 
+### S5 · Set reward recipient via AWP relayer — `scripts/relay-set-recipient.py`
+
+Drives the agent side of KYA matchmaking: point `AWPRegistry.recipient(agent)`
+at the KYA-derived deposit address so KYA can identify and split incoming
+worknet rewards. The agent wallet **never spends gas** — the AWP relayer
+broadcasts on behalf of the signer.
+
+```bash
+# Auto-fetch the deposit address from KYA, then sign & relay:
+KYA_API_BASE=https://kya.link python3 scripts/relay-set-recipient.py \
+  --worknet 845300000012
+
+# Already know the deposit address (skip KYA lookup):
+python3 scripts/relay-set-recipient.py --recipient 0xdeposit... --no-poll
+```
+
+Outputs `{ agent_address, recipient, tx_hash, relay_response, final_status }`
+on stdout. Live progress (`step` / `info` JSON lines) on stderr.
+
+### S6 · Grant delegate to KyaAllocatorProxy — `scripts/relay-grant-delegate.py`
+
+The provider side of matchmaking: authorize `KyaAllocatorProxy` to call
+`allocate` on the provider's behalf. No AWP is moved — only the right to
+manage allocations. The provider wallet does **not** need ETH; the AWP
+relayer pays gas.
+
+```bash
+python3 scripts/relay-grant-delegate.py
+```
+
+`--delegate` defaults to the canonical KyaAllocatorProxy address baked into
+`kya_lib.py`; pass it only if KYA has rotated the proxy.
+
+### S7 · Lock AWP into veAWP via AWP relayer — `scripts/relay-stake.py`
+
+Provider on-boarding step that funds backing capacity. Goes through the
+AWP relayer's `stake/prepare` → sign permit → relayer submits flow:
+
+```bash
+python3 scripts/relay-stake.py --amount 1000 --lock-days 90
+```
+
+The script verifies that `prepare` returned a typed-data with `owner ==
+provider` and `value == amountWei`; otherwise it aborts before signing.
+
 ## Magic link convention
 
 KYA web encodes the user's intent as `kya-sign://<flow>?<query>`:
@@ -259,6 +334,10 @@ KYA web encodes the user's intent as `kya-sign://<flow>?<query>`:
 | `kya-sign://twitter-claim?api=<base>&tweet=<url>` | run `sign-claim.py --api-base <base> --tweet-url <url>` |
 | `kya-sign://kyc?api=<base>&owner=0x...` | run `sign-kyc.py --api-base <base> --owner 0x...` |
 | `kya-sign://sign?clip=1` | run `sign.py --from-clipboard` |
+| `kya-sign://set-recipient?api=<base>&worknet=<id>` | run `relay-set-recipient.py --api-base <base> --worknet <id>` |
+| `kya-sign://set-recipient?recipient=0xdeposit...` | run `relay-set-recipient.py --recipient 0xdeposit...` |
+| `kya-sign://grant-delegate` | run `relay-grant-delegate.py` |
+| `kya-sign://stake?amount=1000&lockDays=90` | run `relay-stake.py --amount 1000 --lock-days 90` |
 
 When the user pastes such a URL in chat, this skill should:
 

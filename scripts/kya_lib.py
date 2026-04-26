@@ -42,7 +42,26 @@ KYA_DOMAIN_NAME = "KYA"
 KYA_DOMAIN_VERSION = "1"
 DEFAULT_CHAIN_ID = 8453  # Base mainnet
 
-USER_AGENT = "kya-skill/0.1.0"
+USER_AGENT = "kya-skill/0.2.0"
+
+# ── AWP 协议常量 ───────────────────────────────────────
+# 这些地址来自 KYA web 的 chainActions.ts，与上游 AWP 协议合约一致；
+# 我们故意硬编码而不接受外部覆盖：skill 只为 KYA 矩阵服务，把签名目标
+# 写死可以避免被诱导成对未知合约的 EIP-712 攻击载体。
+AWP_REGISTRY_ADDRESS = "0x0000F34Ed3594F54faABbCb2Ec45738DDD1c001A"
+KYA_ALLOCATOR_PROXY_ADDRESS = "0xD544E5A2EF9100d3BD2fB7CffD2a4f7C773a1963"
+
+AWP_REGISTRY_DOMAIN_NAME = "AWPRegistry"
+AWP_REGISTRY_DOMAIN_VERSION = "1"
+
+# AWP relayer 公网入口；用户可以通过 AWP_RELAY_BASE 覆盖。
+DEFAULT_AWP_RELAY_BASE = "https://api.awp.sh"
+# Base mainnet RPC;只用于读 AWPRegistry.nonces(user)。
+DEFAULT_BASE_RPC_URL = "https://mainnet.base.org"
+
+# KYA 默认接入的 worknet ID(chainId<<64 | counter,counter=12)。
+# 仅用于在 prompt / 文档里展示;真正落库走 KYA 后端 worknet directory。
+DEFAULT_KYA_WORKNET_ID = "845300000012"
 
 # ── stderr 日志 ─────────────────────────────────────────
 
@@ -534,6 +553,273 @@ def kyc_poll_session(
             return payload
         time.sleep(interval_sec)
     return None
+
+
+# ── AWP relayer ────────────────────────────────────────
+#
+# AWP 协议官方提供的 gasless 中继：用户对 AWPRegistry / AWPToken 上的
+# EIP-712 typed-data 签名,把签名 POST 给 relayer,relayer 代付 gas
+# 上链。KYA 默认假设用户钱包没有 ETH,所以撮合相关的三类操作
+# (setRecipient / grantDelegate / stake) 全部走 relayer。
+#
+# 安全说明:
+#  - typed-data 的 domain.verifyingContract 在本模块写死成 AWPRegistry
+#    或由 relayer 在 stake/prepare 里返回,不接受外部覆盖。
+#  - chainId 默认 8453(Base mainnet),与 KYA 后端校验保持一致。
+#  - skill 不在用户机器上发链上交易,所有上链动作由 AWP relayer 完成。
+
+
+def _awp_relay_base() -> str:
+    base = (os.environ.get("AWP_RELAY_BASE") or DEFAULT_AWP_RELAY_BASE).rstrip("/")
+    return base
+
+
+def _base_rpc_url() -> str:
+    return (os.environ.get("BASE_RPC_URL") or DEFAULT_BASE_RPC_URL).rstrip("/")
+
+
+def _eth_call_nonces(user_address: str) -> int:
+    """读 `AWPRegistry.nonces(address)` —— 用纯 stdlib 直接打 JSON-RPC eth_call。
+
+    selector(`nonces(address)`) = 0x7ecebe00;tail 是 32 字节填充的地址。
+    成功返回十进制 nonce(uint256)。失败时友好 die。
+    """
+    user = validate_address(user_address, "user")
+    selector = "0x7ecebe00"
+    data = selector + user.lower().replace("0x", "").rjust(64, "0")
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "eth_call",
+        "params": [{"to": AWP_REGISTRY_ADDRESS, "data": data}, "latest"],
+    }
+    rpc = _base_rpc_url()
+    status, body = _http_request("POST", rpc, body=payload)
+    if status >= 400 or not isinstance(body, dict):
+        die(f"Base RPC eth_call failed (status={status}): {body!r}")
+    err = body.get("error")
+    if err:
+        die(f"AWPRegistry.nonces revert: {err}")
+    result = body.get("result")
+    if not isinstance(result, str) or not result.startswith("0x"):
+        die(f"AWPRegistry.nonces returned malformed result: {result!r}")
+    try:
+        return int(result, 16)
+    except ValueError:
+        die(f"AWPRegistry.nonces non-hex result: {result!r}")
+        return 0  # unreachable
+
+
+def _awp_registry_domain(chain_id: int) -> dict:
+    return {
+        "name": AWP_REGISTRY_DOMAIN_NAME,
+        "version": AWP_REGISTRY_DOMAIN_VERSION,
+        "chainId": chain_id,
+        "verifyingContract": AWP_REGISTRY_ADDRESS,
+    }
+
+
+def _awp_registry_types(primary_type: str) -> dict:
+    """AWPRegistry 的 EIP712Domain 含 verifyingContract。"""
+    return {
+        "EIP712Domain": [
+            {"name": "name", "type": "string"},
+            {"name": "version", "type": "string"},
+            {"name": "chainId", "type": "uint256"},
+            {"name": "verifyingContract", "type": "address"},
+        ],
+        primary_type: [
+            {"name": "user", "type": "address"},
+            {"name": ("recipient" if primary_type == "SetRecipient" else "delegate"), "type": "address"},
+            {"name": "nonce", "type": "uint256"},
+            {"name": "deadline", "type": "uint256"},
+        ],
+    }
+
+
+def build_awp_set_recipient_typed_data(
+    *,
+    user_address: str,
+    recipient_address: str,
+    nonce: int,
+    deadline: int,
+    chain_id: int = DEFAULT_CHAIN_ID,
+) -> dict:
+    """构造 AWPRegistry.SetRecipient typed-data,与 web/lib/awpRelay.ts 对齐。"""
+    user = validate_address(user_address, "user")
+    recipient = validate_address(recipient_address, "recipient")
+    return {
+        "domain": _awp_registry_domain(chain_id),
+        "types": _awp_registry_types("SetRecipient"),
+        "primaryType": "SetRecipient",
+        "message": {
+            "user": user,
+            "recipient": recipient,
+            "nonce": str(nonce),
+            "deadline": str(deadline),
+        },
+    }
+
+
+def build_awp_grant_delegate_typed_data(
+    *,
+    user_address: str,
+    delegate_address: str,
+    nonce: int,
+    deadline: int,
+    chain_id: int = DEFAULT_CHAIN_ID,
+) -> dict:
+    user = validate_address(user_address, "user")
+    delegate = validate_address(delegate_address, "delegate")
+    return {
+        "domain": _awp_registry_domain(chain_id),
+        "types": _awp_registry_types("GrantDelegate"),
+        "primaryType": "GrantDelegate",
+        "message": {
+            "user": user,
+            "delegate": delegate,
+            "nonce": str(nonce),
+            "deadline": str(deadline),
+        },
+    }
+
+
+def awp_get_registry_nonce(user_address: str) -> int:
+    """读 AWPRegistry.nonces(user)。包了一层日志,方便 wrapper 监控。"""
+    step("awp.nonce.read", user=user_address)
+    n = _eth_call_nonces(user_address)
+    info("awp registry nonce", user=user_address, nonce=n)
+    return n
+
+
+def _post_relay(path: str, body: dict, *, timeout: int = 30) -> dict:
+    base = _awp_relay_base()
+    url = f"{base}{path}"
+    status, payload = _http_request("POST", url, body=body, timeout=timeout)
+    if status >= 400:
+        err = payload.get("error") if isinstance(payload, dict) else None
+        die(f"AWP relay {path} failed (status={status}): {err or payload!r}")
+    return payload if isinstance(payload, dict) else {}
+
+
+def relay_set_recipient(
+    *,
+    user_address: str,
+    recipient_address: str,
+    deadline: int,
+    signature: str,
+    chain_id: int = DEFAULT_CHAIN_ID,
+) -> dict:
+    """POST /api/relay/set-recipient —— relayer 代付 gas 把 setRecipient 上链。"""
+    if not SIG_RE.match(signature):
+        die(f"signature must be 0x followed by 130 hex chars (got: {signature!r})")
+    return _post_relay(
+        "/api/relay/set-recipient",
+        {
+            "chainId": chain_id,
+            "user": user_address,
+            "recipient": recipient_address,
+            "deadline": str(deadline),
+            "signature": signature,
+        },
+    )
+
+
+def relay_grant_delegate(
+    *,
+    user_address: str,
+    delegate_address: str,
+    deadline: int,
+    signature: str,
+    chain_id: int = DEFAULT_CHAIN_ID,
+) -> dict:
+    if not SIG_RE.match(signature):
+        die(f"signature must be 0x followed by 130 hex chars (got: {signature!r})")
+    return _post_relay(
+        "/api/relay/grant-delegate",
+        {
+            "chainId": chain_id,
+            "user": user_address,
+            "delegate": delegate_address,
+            "deadline": str(deadline),
+            "signature": signature,
+        },
+    )
+
+
+def relay_stake_prepare(
+    *,
+    user_address: str,
+    amount_wei: int,
+    lock_seconds: int,
+    chain_id: int = DEFAULT_CHAIN_ID,
+) -> dict:
+    """POST /api/relay/stake/prepare —— 拿到 Permit typed-data 与 submitTo 信息。"""
+    return _post_relay(
+        "/api/relay/stake/prepare",
+        {
+            "chainId": chain_id,
+            "user": user_address,
+            "amount": str(amount_wei),
+            "lockDuration": int(lock_seconds),
+        },
+    )
+
+
+def relay_stake_submit(submit_to: dict, signature: str) -> dict:
+    """把 stake 签名 POST 回 relayer 返回的 submitTo.url。
+
+    接受 prepare 给的 submitTo dict({method,url,body}),把 signature 合并进 body
+    再发出去;只允许 url 落在 AWP_RELAY_BASE 下,避免被诱导成 SSRF。
+    """
+    if not SIG_RE.match(signature):
+        die(f"signature must be 0x followed by 130 hex chars (got: {signature!r})")
+    if not isinstance(submit_to, dict):
+        die("submit_to must be the object returned by stake/prepare")
+    url = submit_to.get("url")
+    method = submit_to.get("method") or "POST"
+    body = submit_to.get("body") or {}
+    if not isinstance(url, str) or not isinstance(body, dict):
+        die("submit_to is missing url/body")
+    if not url.startswith(_awp_relay_base()):
+        die(f"submit_to.url is not under AWP_RELAY_BASE ({url})")
+    body_with_sig = dict(body)
+    body_with_sig["signature"] = signature
+    status, payload = _http_request(method, url, body=body_with_sig, timeout=30)
+    if status >= 400:
+        die(f"AWP relay stake submit failed (status={status}): {payload!r}")
+    return payload if isinstance(payload, dict) else {}
+
+
+def relay_status(tx_hash: str, *, timeout: int = 15) -> dict:
+    """GET /api/relay/status/:txHash —— 查询 relay 提交后的链上确认状态。"""
+    if not re.match(r"^0x[a-fA-F0-9]{64}$", tx_hash or ""):
+        die(f"tx_hash must be 0x followed by 64 hex chars (got: {tx_hash!r})")
+    base = _awp_relay_base()
+    status, payload = _http_request(
+        "GET", f"{base}/api/relay/status/{tx_hash}", timeout=timeout
+    )
+    if status >= 400:
+        die(f"AWP relay status failed (status={status}): {payload!r}")
+    return payload if isinstance(payload, dict) else {}
+
+
+def wait_relay_confirmation(
+    tx_hash: str,
+    *,
+    interval_sec: int = 3,
+    timeout_sec: int = 90,
+) -> dict:
+    """轮询 relay status 至 confirmed/failed/timeout,沿途打 step 日志。"""
+    started = time.time()
+    while time.time() - started < timeout_sec:
+        s = relay_status(tx_hash)
+        st = s.get("status")
+        step("relay.poll", tx_hash=tx_hash, status=st)
+        if st in ("confirmed", "failed"):
+            return s
+        time.sleep(interval_sec)
+    return {"txHash": tx_hash, "status": "timeout"}
 
 
 # ── 通用 CLI parser ────────────────────────────────────
