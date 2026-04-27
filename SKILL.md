@@ -112,32 +112,45 @@ to the public KYA HTTP endpoints with valid signed headers.
 
 ## When to use
 
-Run a script from this skill whenever:
+Run a script from this skill whenever the user (or, on the user's behalf,
+the KYA web "Send to your agent" banner) asks for any of the following
+*intents*:
 
-- The user pastes the URL `https://github.com/GhostClaw-dev/kya-skill` (or any
-  message that mentions "the kya skill from github") into chat. This is the
-  primary entry point — the KYA web "Skill mode · Copy prompt" button puts
-  exactly this URL on the user's clipboard. If the skill isn't installed
-  locally yet, run `git clone https://github.com/GhostClaw-dev/kya-skill
-  ~/.cursor/skills/kya-skill` first, then proceed.
-- The user is on the KYA web wizard (`/claim` or `/kyc`) and wants to skip
-  the **Manual sign with awp-wallet** dialog. The dialog shows a
-  one-click magic link / cursor prompt that resolves to one of the scripts
-  here.
-- The user pastes a `kya-sign://` magic link in chat.
-- The user has KYA typed-data JSON and asks "please sign this with my wallet".
+- "Claim my X / Twitter account for an agent on KYA" → `scripts/sign-claim.py`
+- "Run KYC for an agent on KYA" → `scripts/sign-kyc.py`
+- "Set my agent's reward recipient on KYA / start delegated staking" →
+  `scripts/relay-set-recipient.py`
+- "Authorize KyaAllocatorProxy to allocate on my behalf as a provider" →
+  `scripts/relay-grant-delegate.py`
+- "Sign this KYA / AWPRegistry typed-data with my wallet" → `scripts/sign.py`
+  (generic) or `scripts/sign-action.py` (KYA Action / KycInit shortcut)
 
-### Self-bootstrap from a GitHub URL
+You may also encounter a `kya-sign://` magic link in chat — those resolve
+to one of the same scripts.
 
-Cursor / Claude Code agents that don't have this skill installed should run:
+KYA web's prompts are *intent-only* by design: they describe the API
+endpoint, the typed-data primaryType, and the red lines, but they do **not**
+hard-code `python3 .../sign-claim.py` or any install path. That makes this
+skill one of several possible fulfilments — alongside an in-house signer,
+an MCP tool, or a sandboxed runner. Pick this repo when it's the simplest
+match for the host's safety posture.
+
+### Fetching the skill
+
+Path is the host's call. Any of the following work:
 
 ```bash
+# Cursor's default location (auto-discovered):
 git clone https://github.com/GhostClaw-dev/kya-skill ~/.cursor/skills/kya-skill
+
+# Project-local clone (run scripts directly from there):
+git clone https://github.com/GhostClaw-dev/kya-skill
+
+# Or use the host's package / skill registry — same code, different layout.
 ```
 
-…and then re-read `SKILL.md` from the freshly cloned directory before
-executing any script. This is the fully recommended way to use the skill —
-the user only needs to paste a single GitHub URL plus environment variables.
+After fetching, re-read `SKILL.md` from whichever directory the host placed
+the skill in before executing any script.
 
 ## Requirements
 
