@@ -492,6 +492,39 @@ def kya_claim_twitter(
     return _check_response(status, payload, "twitter_claim")
 
 
+def kya_request_delegated_staking(
+    *,
+    agent_address: str,
+    amount_awp: str,
+    worknet_id: Optional[str],
+    signature: str,
+    timestamp: int,
+    nonce: str,
+) -> dict:
+    """POST /v1/services/staking/request
+
+    Owner-driven delegated staking request: the agent EOA (which already
+    signed the prior setRecipient) now signs an Action(delegated_staking_request)
+    so KYA's matching worker can pick a provider and call allocate() on its
+    behalf, capped at amount_awp.
+
+    Server contract: see docs/HANDOFF_DELEGATED_STAKING_REQUEST.md.
+    Server returns 403 not_verified when the agent has no active social or
+    human attestation — _check_response surfaces that as a clear error.
+    """
+    base = _kya_base()
+    body: dict = {"agent_address": agent_address, "amount_awp": amount_awp}
+    if worknet_id:
+        body["worknet_id"] = worknet_id
+    status, payload = _http_request(
+        "POST",
+        f"{base}/v1/services/staking/request",
+        headers=_signed_headers(signature, timestamp, nonce),
+        body=body,
+    )
+    return _check_response(status, payload, "delegated_staking_request")
+
+
 def kya_list_attestations(
     *, agent_address: str, type_filter: Optional[str] = None
 ) -> dict:
