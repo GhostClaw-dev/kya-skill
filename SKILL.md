@@ -281,22 +281,41 @@ Prints only the `0x...130hex` signature on stdout — easy to pipe into
 
 ### S5 · Set reward recipient via AWP relayer — `scripts/relay-set-recipient.py`
 
-Drives the agent side of KYA matchmaking: point `AWPRegistry.recipient(agent)`
-at the KYA-derived deposit address so KYA can identify and split incoming
-worknet rewards. The agent wallet **never spends gas** — the AWP relayer
-broadcasts on behalf of the signer.
+Drives the agent side of KYA matchmaking. Two stages, both driven by this one
+script:
+
+1. **Stage 1 (always runs)** — point `AWPRegistry.recipient(agent)` at the
+   KYA-derived deposit address so KYA can identify and split incoming worknet
+   rewards. The agent wallet **never spends gas** — the AWP relayer broadcasts
+   on behalf of the signer.
+2. **Stage 2 (only with `--amount`)** — sign a KYA `Action(delegated_staking_request)`
+   and POST it to `/v1/services/staking/request`. KYA's matching worker then
+   picks a provider and calls `KyaAllocatorProxy.allocate()` so the agent gets
+   backed by N AWP without the owner ever locking funds themselves. Server
+   gates on the agent having at least one active `twitter_claim` or `kyc`
+   attestation; the script pre-checks this so the user sees a clear "go run
+   `sign-claim` or `sign-kyc` first" message instead of a server error string.
 
 ```bash
-# Auto-fetch the deposit address from KYA, then sign & relay:
+# Stage 1 only — auto-fetch the deposit address from KYA, then sign & relay:
 KYA_API_BASE=https://kya.link python3 scripts/relay-set-recipient.py \
   --worknet 845300000012
 
 # Already know the deposit address (skip KYA lookup):
 python3 scripts/relay-set-recipient.py --recipient 0xdeposit... --no-poll
+
+# Full delegated-staking flow — owner declares 1000 AWP target stake:
+KYA_API_BASE=https://kya.link python3 scripts/relay-set-recipient.py \
+  --worknet 845300000012 --amount 1000
 ```
 
-Outputs `{ agent_address, recipient, tx_hash, relay_response, final_status }`
-on stdout. Live progress (`step` / `info` JSON lines) on stderr.
+Outputs `{ agent_address, recipient, tx_hash, relay_response, final_status,
+amount_awp, staking_request }` on stdout (last two are `null` when stage 2 is
+skipped). Live progress (`step` / `info` JSON lines) on stderr.
+
+The `--amount` value is a human-friendly AWP decimal string (e.g. `1000` or
+`12.5`); the script converts it to integer wei before signing so the on-the-wire
+`amount_wei` matches KYA's storage format exactly.
 
 ### S6 · Grant delegate to KyaAllocatorProxy — `scripts/relay-grant-delegate.py`
 
@@ -336,6 +355,7 @@ KYA web encodes the user's intent as `kya-sign://<flow>?<query>`:
 | `kya-sign://sign?clip=1` | run `sign.py --from-clipboard` |
 | `kya-sign://set-recipient?api=<base>&worknet=<id>` | run `relay-set-recipient.py --api-base <base> --worknet <id>` |
 | `kya-sign://set-recipient?recipient=0xdeposit...` | run `relay-set-recipient.py --recipient 0xdeposit...` |
+| `kya-sign://set-recipient?api=<base>&worknet=<id>&amount=<awp>` | run `relay-set-recipient.py --api-base <base> --worknet <id> --amount <awp>` (full stage-1 + stage-2 delegated-staking) |
 | `kya-sign://grant-delegate` | run `relay-grant-delegate.py` |
 | `kya-sign://stake?amount=1000&lockDays=90` | run `relay-stake.py --amount 1000 --lock-days 90` |
 

@@ -320,6 +320,102 @@ class HttpClientTests(unittest.TestCase):
                 400, {"error": {"code": "INVALID_INPUT", "message": "bad"}}, "test"
             )
 
+    def test_delegated_staking_request_posts_amount_wei_and_worknet(self) -> None:
+        captured: dict = {}
+
+        def fake_request(method, url, headers=None, body=None, timeout=20):
+            captured.update(method=method, url=url, headers=headers, body=body)
+            return 200, {
+                "request": {
+                    "id": "psr_xyz",
+                    "status": "queued",
+                    "amount_wei": "1000000000000000000000",
+                    "worknet_id": "845300000012",
+                    "agent_address": SAMPLE_ADDR,
+                    "matched_provider": None,
+                    "matched_allocation_id": None,
+                    "failed_reason": None,
+                    "created_at": "2026-04-27T12:00:00Z",
+                    "updated_at": "2026-04-27T12:00:00Z",
+                    "matched_at": None,
+                }
+            }
+
+        with mock.patch.object(kya_lib, "_http_request", side_effect=fake_request):
+            res = kya_lib.kya_request_delegated_staking(
+                agent_address=SAMPLE_ADDR,
+                amount_wei="1000000000000000000000",
+                worknet_id="845300000012",
+                signature=SAMPLE_SIG,
+                timestamp=42,
+                nonce="cafebabecafebabe",
+            )
+        self.assertEqual(res["request"]["status"], "queued")
+        self.assertEqual(captured["method"], "POST")
+        self.assertEqual(
+            captured["url"], "https://kya.test/v1/services/staking/request"
+        )
+        self.assertEqual(captured["body"]["amount_wei"], "1000000000000000000000")
+        self.assertEqual(captured["body"]["worknet_id"], "845300000012")
+        self.assertEqual(captured["body"]["agent_address"], SAMPLE_ADDR)
+        self.assertEqual(captured["headers"]["X-Agent-Signature"], SAMPLE_SIG)
+
+    def test_delegated_staking_request_rejects_zero_or_garbage_amount(self) -> None:
+        with self.assertRaises(SystemExit):
+            kya_lib.kya_request_delegated_staking(
+                agent_address=SAMPLE_ADDR,
+                amount_wei="0",
+                worknet_id="845300000012",
+                signature=SAMPLE_SIG,
+                timestamp=1,
+                nonce="x" * 16,
+            )
+        with self.assertRaises(SystemExit):
+            kya_lib.kya_request_delegated_staking(
+                agent_address=SAMPLE_ADDR,
+                amount_wei="1.5",
+                worknet_id="845300000012",
+                signature=SAMPLE_SIG,
+                timestamp=1,
+                nonce="x" * 16,
+            )
+
+
+class AwpToWeiTests(unittest.TestCase):
+    def test_integer_amount(self) -> None:
+        self.assertEqual(kya_lib.awp_to_wei("1"), "1" + "0" * 18)
+        self.assertEqual(kya_lib.awp_to_wei("1000"), "1000" + "0" * 18)
+
+    def test_decimal_amount(self) -> None:
+        # 1.5 AWP = 1.5 * 1e18 = 1500000000000000000
+        self.assertEqual(kya_lib.awp_to_wei("1.5"), "1500000000000000000")
+        # 0.000000000000000001 AWP = 1 wei
+        self.assertEqual(kya_lib.awp_to_wei("0.000000000000000001"), "1")
+
+    def test_rejects_zero_or_negative_or_too_precise(self) -> None:
+        with self.assertRaises(SystemExit):
+            kya_lib.awp_to_wei("0")
+        with self.assertRaises(SystemExit):
+            kya_lib.awp_to_wei("0.0")
+        with self.assertRaises(SystemExit):
+            kya_lib.awp_to_wei("-1")
+        with self.assertRaises(SystemExit):
+            kya_lib.awp_to_wei("abc")
+        with self.assertRaises(SystemExit):
+            # 19 位小数 → die
+            kya_lib.awp_to_wei("0.1234567890123456789")
+
+    def test_action_typed_data_accepts_delegated_staking_request(self) -> None:
+        td = kya_lib.build_action_typed_data(
+            action="delegated_staking_request",
+            agent_address=SAMPLE_ADDR,
+            timestamp=1_700_000_000,
+            nonce="abcdef0123456789",
+            chain_id=8453,
+        )
+        self.assertEqual(td["primaryType"], "Action")
+        self.assertEqual(td["message"]["action"], "delegated_staking_request")
+
 
 class PollerTests(unittest.TestCase):
     def setUp(self) -> None:

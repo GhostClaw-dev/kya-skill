@@ -50,6 +50,7 @@ from kya_lib import (
     _kya_base,
     apply_api_base,
     awp_get_registry_nonce,
+    awp_to_wei,
     base_parser,
     build_action_typed_data,
     build_awp_set_recipient_typed_data,
@@ -138,15 +139,25 @@ def _fetch_deposit_address(agent: str, worknet_id: str) -> str:
 
 
 def _post_delegated_staking_request(
-    *, agent: str, amount_awp: str, worknet_id: Optional[str], chain_id: int, token: Optional[str]
+    *,
+    agent: str,
+    amount_awp: str,
+    worknet_id: str,
+    chain_id: int,
+    token: Optional[str],
 ) -> dict:
     """Stage 2: signed KYA Action POST that tells matching worker how much.
 
-    Returns the parsed response dict so the caller can print request_id.
-    Errors die — caller should only invoke this after stage 1 succeeded so a
-    failure here doesn't leave a totally unrecoverable state (recipient is
-    set; owner can re-run with --amount once the gating issue clears).
+    Returns the parsed response dict so the caller can print the staking
+    request id / status. Errors die — caller should only invoke this after
+    stage 1 succeeded so a failure here doesn't leave a totally unrecoverable
+    state (recipient is set; owner can re-run with --amount once the gating
+    issue clears).
+
+    KYA stores amounts as integer wei; we convert the owner-facing decimal
+    AWP string here so the prompt UI can stay human-friendly.
     """
+    amount_wei = awp_to_wei(amount_awp)
     timestamp = now_unix_seconds()
     msg_nonce = new_signature_nonce()
     typed = build_action_typed_data(
@@ -160,6 +171,7 @@ def _post_delegated_staking_request(
         "kya.staking_request.signing",
         agent=agent,
         amount_awp=amount_awp,
+        amount_wei=amount_wei,
         worknet_id=worknet_id,
     )
     signature = sign_typed_data(typed, token=token)
@@ -167,7 +179,7 @@ def _post_delegated_staking_request(
         die(f"awp-wallet returned malformed signature: {signature!r}")
     return kya_request_delegated_staking(
         agent_address=agent,
-        amount_awp=amount_awp,
+        amount_wei=amount_wei,
         worknet_id=worknet_id,
         signature=signature,
         timestamp=timestamp,
@@ -281,10 +293,16 @@ def main(argv: Optional[list[str]] = None) -> int:
             chain_id=args.chain_id,
             token=args.token,
         )
+        # 后端响应 shape: { "request": { id, status, worknet_id, amount_wei, ... } }
+        req_obj = (
+            staking_request.get("request") if isinstance(staking_request, dict) else None
+        ) or {}
         step(
             "kya.staking_request.queued",
-            request_id=staking_request.get("request_id"),
-            status=staking_request.get("status"),
+            request_id=req_obj.get("id"),
+            status=req_obj.get("status"),
+            worknet_id=req_obj.get("worknet_id"),
+            amount_wei=req_obj.get("amount_wei"),
         )
 
     print(
