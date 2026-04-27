@@ -173,11 +173,19 @@ def unlock_wallet(
     duration_sec: int = 3600,
     persist_env: bool = True,
 ) -> str:
-    """调用 `awp-wallet unlock` 获取 session token。
+    """Call `awp-wallet unlock` and return the resulting session token.
 
-    - scope / duration 与 awp-skill 的约定一致（`--scope transfer --duration 3600`）。
-    - unlock 的 stdout 是 `{"token": "..."}`，解析失败就 die。
-    - persist_env=True 时顺便写入 AWP_WALLET_TOKEN，让同进程后续所有 awp-wallet 调用复用。
+    Output shape across known awp-wallet versions:
+      - v0.12+ : {"sessionToken": "...", ...}    (current)
+      - v0.10..v0.11 : {"token": "..."}          (legacy)
+      - very old `unlock --raw` : the raw token string on stdout (no JSON)
+
+    We try sessionToken → token → any other *Token / token-like field, then
+    fall back to the raw stdout if it looks token-shaped. Bumping the awp-wallet
+    minor version should not require a skill release for this single rename.
+
+    persist_env=True writes AWP_WALLET_TOKEN so every subsequent awp-wallet call
+    in this process reuses the token.
     """
     step("wallet.unlock", scope=scope, duration_sec=duration_sec)
     code, out, err = _awp_wallet_exec(
@@ -189,18 +197,42 @@ def unlock_wallet(
             "awp-wallet unlock failed: "
             f"{msg}. If your wallet is not initialized, run `awp-wallet init` first."
         )
-    try:
-        token = json.loads(out).get("token", "")
-    except json.JSONDecodeError:
-        # 一些老版本支持 `unlock --raw` 直接打印 token；兼容一下
-        token = out if SIG_RE.pattern and out else ""
-    token = token.strip()
+    token = _extract_unlock_token(out)
     if not token:
-        die(f"awp-wallet unlock returned no token (stdout={out!r})")
+        die(f"awp-wallet unlock returned no recognizable token (stdout={out!r})")
     if persist_env:
         os.environ["AWP_WALLET_TOKEN"] = token
     info("wallet unlocked", scope=scope)
     return token
+
+
+def _extract_unlock_token(stdout: str) -> str:
+    """Pull the session token out of `awp-wallet unlock` stdout.
+
+    Tolerates known key renames (sessionToken vs token) plus the legacy
+    raw-token output. Returns "" when nothing token-like can be found —
+    callers decide how to surface that.
+    """
+    raw = stdout.strip()
+    if not raw:
+        return ""
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        # `unlock --raw` (very old) prints the token on stdout with no wrapper.
+        return raw
+    if not isinstance(payload, dict):
+        return ""
+    # Preferred order: explicit known names first, then any *Token / token-ish
+    # field as a future-proofing escape hatch.
+    for key in ("sessionToken", "token", "accessToken"):
+        v = payload.get(key)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    for key, v in payload.items():
+        if isinstance(v, str) and v.strip() and "token" in key.lower():
+            return v.strip()
+    return ""
 
 
 def _call_with_autounlock(
