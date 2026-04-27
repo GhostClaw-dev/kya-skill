@@ -56,6 +56,7 @@ from kya_lib import (
     die,
     get_wallet_address,
     info,
+    kya_list_attestations,
     kya_request_delegated_staking,
     new_signature_nonce,
     now_unix_seconds,
@@ -68,6 +69,39 @@ from kya_lib import (
 
 
 _AMOUNT_RE = re.compile(r"^\d+(?:\.\d{1,18})?$")
+
+
+def _ensure_verified(agent: str) -> list[str]:
+    """Fail fast if the agent has no active Social or Human attestation.
+
+    Delegated staking is gated on at least one of {twitter_claim, kyc} being
+    active for the agent. The server enforces this with 403 not_verified, but
+    catching it here avoids burning a setRecipient gasless tx + giving the
+    user a clear "run sign-claim or sign-kyc first" message in their terminal
+    instead of a server error string after stage 1.
+
+    Returns the list of verification kinds present (for logging only). Dies
+    on no verification or lookup failure.
+    """
+    payload = kya_list_attestations(agent_address=agent)
+    items = payload.get("attestations", []) if isinstance(payload, dict) else []
+    via: list[str] = []
+    for att in items:
+        if att.get("status") != "active":
+            continue
+        t = att.get("type")
+        if t == "twitter_claim" and "social" not in via:
+            via.append("social")
+        elif t == "kyc" and "human" not in via:
+            via.append("human")
+    if not via:
+        die(
+            f"Agent {agent} has no active Social or Human verification yet — "
+            "delegated staking is gated on one of those.\n"
+            "Run sign-claim.py for Social (X) verification, or sign-kyc.py "
+            "for Human verification, then retry."
+        )
+    return via
 
 
 def _validate_amount(raw: str) -> str:
@@ -189,6 +223,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.amount:
         amount_awp = _validate_amount(args.amount)
         step("amount.resolved", amount_awp=amount_awp)
+        # Eligibility precheck: delegated staking requires Social or Human.
+        # Done before stage 1 so the user doesn't burn a setRecipient tx
+        # if their agent isn't yet verified — and so we surface "go run
+        # sign-claim/sign-kyc first" cleanly in the terminal.
+        via = _ensure_verified(agent)
+        step("agent.verified", via=",".join(via))
 
     nonce = awp_get_registry_nonce(agent)
     deadline = now_unix_seconds() + max(60, int(args.deadline_seconds))
