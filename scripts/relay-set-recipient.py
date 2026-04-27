@@ -23,13 +23,12 @@ lands. Without --amount stage 2 is skipped (back-compat).
 Examples::
 
   # Full flow with amount (matches what the /services Delegated Staking
-  # card generates as the prompt):
-  KYA_API_BASE=https://kya.link \
-    python3 relay-set-recipient.py --worknet 845300000012 --amount 1000
+  # card generates as the prompt). KYA_API_BASE defaults to https://kya.link;
+  # set the env var or pass --api-base only to point at a non-prod endpoint.
+  python3 relay-set-recipient.py --worknet 845300000012 --amount 1000
 
   # Stage 1 only (legacy):
-  KYA_API_BASE=https://kya.link \
-    python3 relay-set-recipient.py --worknet 845300000012
+  python3 relay-set-recipient.py --worknet 845300000012
 
   # Already know the recipient address:
   python3 relay-set-recipient.py --recipient 0xdeposit... --no-poll

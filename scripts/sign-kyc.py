@@ -20,8 +20,8 @@ Headless / CI fallback (`--no-handoff`):
   the session to terminal status, like the legacy behaviour.
 
 Examples:
-  # Default — print the KYA web URL and exit
-  KYA_KYC_BASE=https://kya.link python3 sign-kyc.py
+  # Default — talks to https://kya.link, prints the KYA web URL and exits
+  python3 sign-kyc.py
 
   # Different owner / agent
   python3 sign-kyc.py --owner 0xowner... --agent 0xagent...
