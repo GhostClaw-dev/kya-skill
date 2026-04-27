@@ -52,8 +52,8 @@ metadata:
       anyBins:
         - awp-wallet
       env:
-        - KYA_API_BASE        # required for kya-claim flows; e.g. https://kya.link
-        - KYA_KYC_BASE        # required for kya-kyc flows
+        - KYA_API_BASE        # optional; default https://kya.link (claim / set-recipient flows)
+        - KYA_KYC_BASE        # optional; default https://kya.link (kya-kyc flow)
         - KYA_CHAIN_ID        # optional; default 8453 (Base mainnet)
         - AWP_RELAY_BASE      # optional; default https://api.awp.sh (used by relay-* scripts)
         - BASE_RPC_URL        # optional; default https://mainnet.base.org (read AWPRegistry.nonces)
@@ -154,8 +154,8 @@ the user only needs to paste a single GitHub URL plus environment variables.
 
   | Variable | Required | Default | Notes |
   |---|---|---|---|
-  | `KYA_API_BASE` | for claim / set-recipient | — | e.g. `https://kya.link` |
-  | `KYA_KYC_BASE` | for KYC flow | — | usually same host as `KYA_API_BASE` |
+  | `KYA_API_BASE` | no | `https://kya.link` | override for claim / set-recipient |
+  | `KYA_KYC_BASE` | no | `https://kya.link` | override for KYC flow |
   | `KYA_CHAIN_ID` | no | `8453` | EIP-712 domain `chainId` (Base mainnet) |
   | `AWP_RELAY_BASE` | no | `https://api.awp.sh` | used by `relay-*` scripts |
   | `BASE_RPC_URL` | no | `https://mainnet.base.org` | reads `AWPRegistry.nonces(user)` |
@@ -189,7 +189,6 @@ and polls until active.
 
 ```bash
 # Interactive (prints claim text, waits for tweet URL on stdin):
-KYA_API_BASE=https://kya.link \
 python3 scripts/sign-claim.py
 
 # Headless (already published the tweet):
@@ -220,7 +219,6 @@ polls the kyc-service until the session reaches a terminal status (Approved /
 Declined / Abandoned / Expired).
 
 ```bash
-KYA_KYC_BASE=https://kya.link \
 python3 scripts/sign-kyc.py --owner 0xowner...
 ```
 
@@ -298,15 +296,13 @@ script:
 
 ```bash
 # Stage 1 only — auto-fetch the deposit address from KYA, then sign & relay:
-KYA_API_BASE=https://kya.link python3 scripts/relay-set-recipient.py \
-  --worknet 845300000012
+python3 scripts/relay-set-recipient.py --worknet 845300000012
 
 # Already know the deposit address (skip KYA lookup):
 python3 scripts/relay-set-recipient.py --recipient 0xdeposit... --no-poll
 
 # Full delegated-staking flow — owner declares 1000 AWP target stake:
-KYA_API_BASE=https://kya.link python3 scripts/relay-set-recipient.py \
-  --worknet 845300000012 --amount 1000
+python3 scripts/relay-set-recipient.py --worknet 845300000012 --amount 1000
 ```
 
 Outputs `{ agent_address, recipient, tx_hash, relay_response, final_status,
@@ -391,5 +387,5 @@ When the user pastes such a URL in chat, this skill should:
 | `awp-wallet CLI not found in PATH` | binary not installed | install awp-wallet, restart shell |
 | `[INVALID_SIGNATURE] twitter_prepare: ...` | clock skew | `w32tm /resync` (Windows) / `sudo sntp -sS time.apple.com` |
 | `[AGENT_MISMATCH] ...` | `--agent` differs from the active awp-wallet profile EOA | run `awp-wallet wallets` to find the matching profile id, then `export AWP_AGENT_ID=<id>` (or pass `--agent-id <id>`) and retry. Confirm with `awp-wallet receive` — its output must equal `--agent`. |
-| `KYA API unreachable (...)` | wrong `KYA_API_BASE` / network | sanity-check with `curl <base>/api/healthz` |
+| `KYA API unreachable (...)` | wrong `KYA_API_BASE` / network (defaults to `https://kya.link`) | sanity-check with `curl <base>/api/healthz` |
 | `aborted by user (no tweet URL provided)` | empty stdin in interactive mode | re-run and paste the URL when prompted, or pass `--tweet-url` |

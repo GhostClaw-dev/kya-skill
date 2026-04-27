@@ -396,14 +396,13 @@ def new_signature_nonce() -> str:
 # ── KYA HTTP 客户端 ────────────────────────────────────
 
 
+DEFAULT_KYA_API_BASE = "https://kya.link"
+DEFAULT_KYA_KYC_BASE = "https://kya.link"
+
+
 def _kya_base() -> str:
     base = (os.environ.get("KYA_API_BASE") or "").rstrip("/")
-    if not base:
-        die(
-            "KYA_API_BASE environment variable not set. Example: "
-            "export KYA_API_BASE=https://kya.link"
-        )
-    return base
+    return base or DEFAULT_KYA_API_BASE
 
 
 def _http_request(
@@ -600,12 +599,7 @@ def kya_poll_attestation(
 
 def _kyc_base() -> str:
     base = (os.environ.get("KYA_KYC_BASE") or "").rstrip("/")
-    if not base:
-        die(
-            "KYA_KYC_BASE environment variable not set. Example: "
-            "export KYA_KYC_BASE=https://kya.link"
-        )
-    return base
+    return base or DEFAULT_KYA_KYC_BASE
 
 
 def kyc_create_session(

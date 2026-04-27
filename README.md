@@ -43,7 +43,6 @@ git clone https://github.com/GhostClaw-dev/kya-skill ~/.cursor/skills/kya-skill
 
 Then run:
 
-KYA_API_BASE=https://kya.link \
 python3 ~/.cursor/skills/kya-skill/scripts/sign-claim.py
 ```
 
@@ -109,8 +108,8 @@ cd ~/.cursor/skills/kya-skill && git pull
 
 | Env var | Required | Default | Notes |
 |---|---|---|---|
-| `KYA_API_BASE` | for claim / set-recipient flows | — | e.g. `https://kya.link` |
-| `KYA_KYC_BASE` | for KYC flow | — | usually same host as `KYA_API_BASE` |
+| `KYA_API_BASE` | no | `https://kya.link` | override for claim / set-recipient flows |
+| `KYA_KYC_BASE` | no | `https://kya.link` | override for KYC flow |
 | `KYA_CHAIN_ID` | no | `8453` | EIP-712 domain `chainId` (Base mainnet) |
 | `AWP_RELAY_BASE` | no | `https://api.awp.sh` | used by `relay-*.py` for gasless tx |
 | `BASE_RPC_URL` | no | `https://mainnet.base.org` | reads `AWPRegistry.nonces(user)` |
@@ -166,7 +165,6 @@ If the skill isn't installed locally yet:
   git clone https://github.com/GhostClaw-dev/kya-skill ~/.cursor/skills/kya-skill
 
 Then:
-  KYA_API_BASE=<your-base> \
   python3 ~/.cursor/skills/kya-skill/scripts/sign-claim.py \
     --chain-id 8453 --agent 0x…
 ```

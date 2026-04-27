@@ -21,8 +21,8 @@ Headless / CI fallback (`--tweet-url`):
   --tweet-url and the script will POST claim + poll attestations as before.
 
 Examples:
-  # Default — print the KYA web URL and exit
-  KYA_API_BASE=https://kya.link python3 sign-claim.py
+  # Default — talks to https://kya.link, prints the KYA web URL and exits
+  python3 sign-claim.py
 
   # Headless — submit immediately (no web page involved)
   python3 sign-claim.py --tweet-url https://x.com/me/status/123 --agent 0xabc...
