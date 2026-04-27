@@ -3,7 +3,7 @@
 > Sign and submit [KYA (Know Your Agent)](https://kya.link) attestations
 > from your IDE. No more copying EIP-712 JSON between browser and terminal.
 
-[![tests](https://img.shields.io/badge/tests-27%20passing-brightgreen)](./scripts/test_kya_lib.py)
+[![tests](https://img.shields.io/badge/tests-33%20passing-brightgreen)](./scripts/test_kya_lib.py)
 [![python](https://img.shields.io/badge/python-3.9%2B-blue)](https://www.python.org/)
 [![license](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 
