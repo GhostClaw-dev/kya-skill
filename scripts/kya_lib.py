@@ -321,8 +321,15 @@ def build_action_typed_data(
     chain_id: int = DEFAULT_CHAIN_ID,
 ) -> dict:
     """构造 KYA twitter_prepare / twitter_claim 的 typed-data。"""
-    if action not in ("twitter_prepare", "twitter_claim"):
-        die(f"unknown action {action!r}; expected twitter_prepare|twitter_claim")
+    if action not in (
+        "twitter_prepare",
+        "twitter_claim",
+        "delegated_staking_request",
+    ):
+        die(
+            f"unknown action {action!r}; expected one of "
+            "twitter_prepare|twitter_claim|delegated_staking_request"
+        )
     return {
         "domain": _eip712_domain(chain_id),
         "types": _eip712_types_envelope(
@@ -492,11 +499,34 @@ def kya_claim_twitter(
     return _check_response(status, payload, "twitter_claim")
 
 
+def awp_to_wei(amount_awp: str) -> str:
+    """把 owner 输入的 AWP 十进制串（如 "1000.5"）转成整数 wei 字符串。
+
+    AWP 在 Base 上是 18 位 decimals，与服务端 amount_wei 字段约定一致。
+    使用 stdlib int 拼装避免引入 decimal 第三方库；超过 18 位小数会截断（die）。
+    """
+    s = amount_awp.strip()
+    if "." in s:
+        whole, frac = s.split(".", 1)
+    else:
+        whole, frac = s, ""
+    if not whole.isdigit() or (frac and not frac.isdigit()):
+        die(f"amount must be a positive decimal, got {amount_awp!r}")
+    if len(frac) > 18:
+        die(f"amount has more than 18 decimal places: {amount_awp!r}")
+    frac_padded = (frac + "0" * 18)[:18]
+    wei = whole + frac_padded
+    wei = wei.lstrip("0") or "0"
+    if wei == "0":
+        die(f"amount must be > 0, got {amount_awp!r}")
+    return wei
+
+
 def kya_request_delegated_staking(
     *,
     agent_address: str,
-    amount_awp: str,
-    worknet_id: Optional[str],
+    amount_wei: str,
+    worknet_id: str,
     signature: str,
     timestamp: int,
     nonce: str,
@@ -506,16 +536,19 @@ def kya_request_delegated_staking(
     Owner-driven delegated staking request: the agent EOA (which already
     signed the prior setRecipient) now signs an Action(delegated_staking_request)
     so KYA's matching worker can pick a provider and call allocate() on its
-    behalf, capped at amount_awp.
+    behalf, capped at amount_wei (integer wei string).
 
-    Server contract: see docs/HANDOFF_DELEGATED_STAKING_REQUEST.md.
-    Server returns 403 not_verified when the agent has no active social or
-    human attestation — _check_response surfaces that as a clear error.
+    Server gates on social|human attestation present (403 IDENTITY_REQUIRED
+    if neither) — _check_response surfaces that as a clear error.
     """
     base = _kya_base()
-    body: dict = {"agent_address": agent_address, "amount_awp": amount_awp}
-    if worknet_id:
-        body["worknet_id"] = worknet_id
+    if not amount_wei.isdigit() or amount_wei == "0":
+        die(f"amount_wei must be a positive base-10 integer string, got {amount_wei!r}")
+    body: dict = {
+        "agent_address": agent_address,
+        "amount_wei": amount_wei,
+        "worknet_id": worknet_id,
+    }
     status, payload = _http_request(
         "POST",
         f"{base}/v1/services/staking/request",
