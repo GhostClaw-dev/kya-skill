@@ -1,32 +1,52 @@
-﻿#!/usr/bin/env python3
-"""KYA KYC initiation — sign + create session + open Didit + poll.
+#!/usr/bin/env python3
+"""KYA KYC initiation — sign machine half, hand the user a KYA web link.
 
-This handles only the *initiation* part of the KYC flow that absolutely needs
-the agent's signature; the actual selfie/document verification still happens
-inside Didit's hosted UI (because that's where the user's biometrics are
-captured and validated). After this script prints the verification URL, the
-user opens it in any browser, completes the Didit flow, and the script polls
-until the session reaches a terminal status.
+Revision 5 flow (agent → user handoff):
+
+  1. Read agent + owner addresses (from awp-wallet or --agent / --owner).
+  2. Sign EIP-712 KycInit.
+  3. POST /kyc/sessions → receive {session_id, verification_url, …}.
+  4. Build and print a KYA web URL:
+        https://kya.link/verify/human/session#agent=…&session_id=…&didit_url=…
+     The user opens it in their browser; the landing page embeds the Didit
+     iframe and polls KYA for the session status.
+  5. Exit. No long-running poll, no terminal-blocking prompts.
+
+Why fragment (#): keeps the Didit verification URL out of KYA web's server
+logs and out of the Referer header.
+
+Headless / CI fallback (`--no-handoff`):
+  Skip printing the KYA landing URL and just print the raw Didit URL + poll
+  the session to terminal status, like the legacy behaviour.
 
 Examples:
+  # Default — print the KYA web URL and exit
   KYA_KYC_BASE=https://kya.link python3 sign-kyc.py
-  python3 sign-kyc.py --owner 0xowner... --agent 0xagent... --no-poll
+
+  # Different owner / agent
+  python3 sign-kyc.py --owner 0xowner... --agent 0xagent...
+
+  # Headless poll-and-wait (legacy)
+  python3 sign-kyc.py --no-handoff --poll-timeout 300
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import sys
 
 from kya_lib import (
     apply_api_base,
     base_parser,
     build_kyc_init_typed_data,
+    build_web_landing_url,
     die,
     get_wallet_address,
     info,
     kyc_create_session,
     kyc_poll_session,
+    kya_web_base,
     new_signature_nonce,
     now_unix_seconds,
     sign_typed_data,
@@ -37,7 +57,8 @@ from kya_lib import (
 
 def _parse_args() -> argparse.Namespace:
     parser = base_parser(
-        "Run the KYA KYC initiation flow (sign KycInit + create Didit session + poll)."
+        "Run the KYA KYC initiation flow and hand the user a KYA web link to "
+        "complete the Didit verification."
     )
     parser.add_argument(
         "--agent",
@@ -53,17 +74,61 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--no-poll",
+        "--no-handoff",
         action="store_true",
-        help="Skip polling; just print the Didit verification URL and exit.",
+        help="Headless mode: skip the KYA web link and poll the Didit session inline.",
     )
     parser.add_argument(
         "--poll-timeout",
         type=int,
         default=900,
-        help="Seconds to wait for the Didit session to reach a terminal status (default 900).",
+        help="(Headless mode only) seconds to wait for terminal status (default 900).",
     )
     return parser.parse_args()
+
+
+def _print_handoff_link(
+    *,
+    web_base: str,
+    agent: str,
+    owner: str,
+    session_id: str,
+    verification_url: str,
+    session_status: str,
+) -> None:
+    fragment = {
+        "agent": agent,
+        "session_id": session_id,
+        "didit_url": verification_url,
+    }
+    url = build_web_landing_url(
+        web_base=web_base,
+        path="/verify/human/session",
+        fragment_params=fragment,
+    )
+
+    print("", file=sys.stderr)
+    print("────── Hand this link to the user ──────", file=sys.stderr)
+    print(url, file=sys.stderr)
+    print("────────────────────────────────────────", file=sys.stderr)
+    print(
+        "The landing page will embed Didit and poll KYA for the result.",
+        file=sys.stderr,
+    )
+
+    print(
+        json.dumps(
+            {
+                "mode": "handoff",
+                "agent_address": agent,
+                "owner_address": owner,
+                "session_id": session_id,
+                "verification_url": verification_url,
+                "status": session_status,
+                "handoff_url": url,
+            }
+        )
+    )
 
 
 def main() -> None:
@@ -111,24 +176,22 @@ def main() -> None:
         die(f"unexpected create_session response: {session}")
     step("kyc.session_created", session_id=session_id)
 
-    print("\n────── KYC verification ──────", flush=True)
-    print(f"Open this URL in any browser to complete Didit:", flush=True)
-    print(verification_url, flush=True)
-    print("──────────────────────────────", flush=True)
-
-    if args.no_poll:
-        print(
-            json.dumps(
-                {
-                    "agent_address": agent,
-                    "owner_address": owner,
-                    "session_id": session_id,
-                    "verification_url": verification_url,
-                    "status": session.get("status", "Pending"),
-                }
-            )
+    if not args.no_handoff:
+        _print_handoff_link(
+            web_base=kya_web_base(args),
+            agent=agent,
+            owner=owner,
+            session_id=session_id,
+            verification_url=verification_url,
+            session_status=session.get("status", "Pending"),
         )
         return
+
+    # ── Headless / legacy path ────────────────────────
+    print("\n────── KYC verification ──────", flush=True)
+    print("Open this URL in any browser to complete Didit:", flush=True)
+    print(verification_url, flush=True)
+    print("──────────────────────────────", flush=True)
 
     final = kyc_poll_session(
         session_id, interval_sec=5, timeout_sec=args.poll_timeout
@@ -141,6 +204,7 @@ def main() -> None:
         print(
             json.dumps(
                 {
+                    "mode": "headless",
                     "agent_address": agent,
                     "session_id": session_id,
                     "verification_url": verification_url,
@@ -154,6 +218,7 @@ def main() -> None:
     print(
         json.dumps(
             {
+                "mode": "headless",
                 "agent_address": agent,
                 "owner_address": owner,
                 "session_id": session_id,

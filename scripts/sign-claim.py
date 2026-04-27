@@ -1,29 +1,34 @@
-﻿#!/usr/bin/env python3
-"""KYA Twitter Claim — sign + prepare + (post tweet) + claim + poll, end-to-end.
+#!/usr/bin/env python3
+"""KYA Twitter Claim — sign machine half, hand the user a KYA web link.
 
-This is the "lean B+" flow: the user copies a magic link from KYA web, runs this
-script in their IDE, and it handles every step that previously required manual
-JSON / signature copy-paste:
+Revision 5 flow (agent → user handoff):
 
   1. Read agent address from awp-wallet (or --agent override).
-  2. POST /v1/attestations/twitter/prepare — sign EIP-712 Action(twitter_prepare),
-     receive `{ nonce, claim_text, expires_at }`.
-  3. Print the claim_text and an X intent URL; pause for the user to publish the
-     tweet and paste the tweet URL back (unless --tweet-url is provided).
-  4. POST /v1/attestations/twitter/claim — sign EIP-712 Action(twitter_claim),
-     submit the tweet URL.
-  5. Poll GET /v1/agents/:address/attestations until the new attestation goes
-     active or revoked.
+  2. Sign EIP-712 Action(twitter_prepare).
+  3. POST /v1/attestations/twitter/prepare → receive {nonce, claim_text, expires_at}.
+  4. Sign EIP-712 Action(twitter_claim) — cached for the web landing page to submit.
+  5. Build and print a single KYA web URL:
+        https://kya.link/verify/social/claim#agent=…&nonce=…&claim_text=…&sig=…&ts=…&msg_nonce=…
+     The user opens it in their browser, posts the tweet, pastes the URL on the
+     landing page, and submits — KYA writes the attestation.
+  6. Exit. No stdin reads, no polling.
+
+Why fragment (#) instead of query: keeps the claim signature out of KYA web's
+server logs and out of the Referer header sent to twitter.com.
+
+Headless / CI fallback (`--tweet-url`):
+  When you already know the published tweet URL (no human in the loop), pass
+  --tweet-url and the script will POST claim + poll attestations as before.
 
 Examples:
-  # Interactive: tells user to publish tweet and paste URL
+  # Default — print the KYA web URL and exit
   KYA_API_BASE=https://kya.link python3 sign-claim.py
 
-  # Headless (already published the tweet):
+  # Headless — submit immediately (no web page involved)
   python3 sign-claim.py --tweet-url https://x.com/me/status/123 --agent 0xabc...
 
-  # Custom chain id and base URL:
-  python3 sign-claim.py --api-base http://localhost:8080 --chain-id 31337
+  # Local KYA / chain
+  python3 sign-claim.py --api-base http://localhost:8080 --web-base http://localhost:3000 --chain-id 31337
 """
 
 from __future__ import annotations
@@ -31,18 +36,19 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import urllib.parse
 
 from kya_lib import (
     apply_api_base,
     base_parser,
     build_action_typed_data,
+    build_web_landing_url,
     die,
     get_wallet_address,
     info,
     kya_claim_twitter,
     kya_poll_attestation,
     kya_prepare_twitter,
+    kya_web_base,
     new_signature_nonce,
     now_unix_seconds,
     sign_typed_data,
@@ -54,7 +60,8 @@ from kya_lib import (
 
 def _parse_args() -> argparse.Namespace:
     parser = base_parser(
-        "Run the KYA Twitter claim flow end-to-end (sign + prepare + claim + poll)."
+        "Run the KYA Twitter claim machine half and hand the user a web link "
+        "to publish the tweet from."
     )
     parser.add_argument(
         "--agent",
@@ -65,26 +72,22 @@ def _parse_args() -> argparse.Namespace:
         "--tweet-url",
         default="",
         help=(
-            "Pre-published tweet URL. If omitted, the script prints the claim text "
-            "and waits for the user to publish then paste the URL on stdin."
+            "Headless fallback: submit this tweet URL directly without printing "
+            "a web link. Useful for CI / pre-published tweets."
         ),
     )
     parser.add_argument(
         "--no-poll",
         action="store_true",
-        help="Skip the post-claim attestation polling (returns immediately).",
+        help="(Headless mode only) skip attestation polling and return immediately.",
     )
     parser.add_argument(
         "--poll-timeout",
         type=int,
         default=120,
-        help="Seconds to wait for the attestation to flip to active|revoked (default 120).",
+        help="(Headless mode only) seconds to wait for the attestation (default 120).",
     )
     return parser.parse_args()
-
-
-def _x_intent_url(text: str) -> str:
-    return "https://twitter.com/intent/tweet?text=" + urllib.parse.quote(text, safe="")
 
 
 def _sign_action(
@@ -116,76 +119,61 @@ def _sign_action(
     return signature, timestamp, nonce
 
 
-def _prompt_tweet_url() -> str:
-    """从 stdin 阻塞读 URL，trim & validate；空输入视为放弃。"""
+def _print_handoff_link(*, web_base: str, agent: str, prepared: dict, claim_sig: tuple[str, int, str]) -> None:
+    """构造并向 stderr 打印 KYA 落地链接；stdout 输出结构化 JSON 给上游 agent。
+
+    stderr 的"块状"打印是给人类（agent host UI）看的醒目提示；
+    stdout 的 JSON 让 agent 解析、转发、记录。两路同时输出避免上游误读人类提示。
+    """
+    sig, ts, msg_nonce = claim_sig
+    fragment = {
+        "agent": agent,
+        "nonce": prepared.get("nonce") or "",
+        "claim_text": prepared.get("claim_text") or "",
+        "expires_at": prepared.get("expires_at") or "",
+        "sig": sig,
+        "ts": str(ts),
+        "msg_nonce": msg_nonce,
+    }
+    url = build_web_landing_url(
+        web_base=web_base,
+        path="/verify/social/claim",
+        fragment_params=fragment,
+    )
+
+    print("", file=sys.stderr)
+    print("────── Hand this link to the user ──────", file=sys.stderr)
+    print(url, file=sys.stderr)
+    print("────────────────────────────────────────", file=sys.stderr)
     print(
-        "\nPaste the tweet URL once you've published it (or empty line to abort):",
+        "The link is valid for ~5 minutes (claim signature timestamp window). "
+        "If it expires, re-run this script.",
         file=sys.stderr,
-        flush=True,
-    )
-    try:
-        raw = input("> ").strip()
-    except EOFError:
-        die("no input received from stdin (run interactively or pass --tweet-url)")
-        return ""  # unreachable
-    if not raw:
-        die("aborted by user (no tweet URL provided)")
-    return validate_tweet_url(raw)
-
-
-def main() -> None:
-    args = _parse_args()
-    apply_api_base(args)
-
-    agent = (
-        validate_address(args.agent, "--agent")
-        if args.agent
-        else get_wallet_address(args.token or None)
-    )
-    info("agent resolved", agent=agent, chain_id=args.chain_id)
-
-    # ── Step 1: prepare ───────────────────────────────────
-    sig, ts, nonce = _sign_action(
-        action="twitter_prepare",
-        agent_address=agent,
-        chain_id=args.chain_id,
-        token=args.token,
-    )
-    prepared = kya_prepare_twitter(
-        agent_address=agent, signature=sig, timestamp=ts, nonce=nonce
-    )
-    claim_text = prepared.get("claim_text") or ""
-    claim_nonce = prepared.get("nonce") or ""
-    if not claim_text or not claim_nonce:
-        die(f"unexpected prepare response: {prepared}")
-    step(
-        "prepare.ok",
-        nonce=claim_nonce,
-        expires_at=prepared.get("expires_at"),
-        claim_text_chars=len(claim_text),
     )
 
-    # ── Step 2: tweet (interactive) ──────────────────────
-    print("\n────── Tweet to publish ──────", file=sys.stderr)
-    print(claim_text, file=sys.stderr)
-    print("──────────────────────────────", file=sys.stderr)
-    print(f"Quick intent link: {_x_intent_url(claim_text)}", file=sys.stderr)
-
-    tweet_url = (
-        validate_tweet_url(args.tweet_url) if args.tweet_url else _prompt_tweet_url()
+    # Machine-readable summary so the host agent can forward / display the link.
+    print(
+        json.dumps(
+            {
+                "mode": "handoff",
+                "agent_address": agent,
+                "claim_nonce": prepared.get("nonce"),
+                "claim_text": prepared.get("claim_text"),
+                "expires_at": prepared.get("expires_at"),
+                "handoff_url": url,
+            }
+        )
     )
 
-    # ── Step 3: claim ─────────────────────────────────────
-    sig2, ts2, nonce2 = _sign_action(
-        action="twitter_claim",
-        agent_address=agent,
-        chain_id=args.chain_id,
-        token=args.token,
-    )
+
+def _run_headless(*, agent: str, args: argparse.Namespace, prepared: dict, claim_sig: tuple[str, int, str]) -> None:
+    """`--tweet-url` 直接提交并可选轮询。保留给 CI / 已发推场景。"""
+    sig2, ts2, nonce2 = claim_sig
+    tweet_url = validate_tweet_url(args.tweet_url)
     claim_resp = kya_claim_twitter(
         agent_address=agent,
         tweet_url=tweet_url,
-        claim_nonce=claim_nonce,
+        claim_nonce=prepared.get("nonce") or "",
         signature=sig2,
         timestamp=ts2,
         nonce=nonce2,
@@ -195,11 +183,11 @@ def main() -> None:
         die(f"unexpected claim response: {claim_resp}")
     step("claim.ok", attestation_id=attestation_id, status=claim_resp.get("status"))
 
-    # ── Step 4: poll ──────────────────────────────────────
     if args.no_poll:
         print(
             json.dumps(
                 {
+                    "mode": "headless",
                     "agent_address": agent,
                     "attestation_id": attestation_id,
                     "status": claim_resp.get("status"),
@@ -224,6 +212,7 @@ def main() -> None:
         print(
             json.dumps(
                 {
+                    "mode": "headless",
                     "agent_address": agent,
                     "attestation_id": attestation_id,
                     "status": "pending",
@@ -237,6 +226,7 @@ def main() -> None:
     print(
         json.dumps(
             {
+                "mode": "headless",
                 "agent_address": agent,
                 "attestation_id": final.get("id"),
                 "status": final.get("status"),
@@ -244,6 +234,61 @@ def main() -> None:
                 "metadata": final.get("metadata", {}),
             }
         )
+    )
+
+
+def main() -> None:
+    args = _parse_args()
+    apply_api_base(args)
+
+    agent = (
+        validate_address(args.agent, "--agent")
+        if args.agent
+        else get_wallet_address(args.token or None)
+    )
+    info("agent resolved", agent=agent, chain_id=args.chain_id)
+
+    # ── Sign prepare ─────────────────────────────────
+    sig, ts, nonce = _sign_action(
+        action="twitter_prepare",
+        agent_address=agent,
+        chain_id=args.chain_id,
+        token=args.token,
+    )
+    prepared = kya_prepare_twitter(
+        agent_address=agent, signature=sig, timestamp=ts, nonce=nonce
+    )
+    claim_text = prepared.get("claim_text") or ""
+    claim_nonce = prepared.get("nonce") or ""
+    if not claim_text or not claim_nonce:
+        die(f"unexpected prepare response: {prepared}")
+    step(
+        "prepare.ok",
+        nonce=claim_nonce,
+        expires_at=prepared.get("expires_at"),
+        claim_text_chars=len(claim_text),
+    )
+
+    # ── Sign claim (cached for landing page or submitted headless) ──
+    claim_sig = _sign_action(
+        action="twitter_claim",
+        agent_address=agent,
+        chain_id=args.chain_id,
+        token=args.token,
+    )
+
+    # ── Branch: headless vs handoff ──────────────────
+    if args.tweet_url:
+        _run_headless(
+            agent=agent, args=args, prepared=prepared, claim_sig=claim_sig
+        )
+        return
+
+    _print_handoff_link(
+        web_base=kya_web_base(args),
+        agent=agent,
+        prepared=prepared,
+        claim_sig=claim_sig,
     )
 
 

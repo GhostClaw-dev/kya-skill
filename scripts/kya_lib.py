@@ -27,6 +27,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any, Optional
 
@@ -847,6 +848,14 @@ def base_parser(description: str) -> argparse.ArgumentParser:
         default=os.environ.get("KYA_API_BASE", ""),
         help="KYA API base URL (overrides env KYA_API_BASE)",
     )
+    parser.add_argument(
+        "--web-base",
+        default=os.environ.get("KYA_WEB_BASE", ""),
+        help=(
+            "KYA web base URL used to build the human-handoff link printed at the "
+            "end of the flow (overrides env KYA_WEB_BASE; defaults to https://kya.link)"
+        ),
+    )
     return parser
 
 
@@ -854,3 +863,36 @@ def apply_api_base(args: argparse.Namespace) -> None:
     """让 --api-base 命令行参数覆盖环境变量。"""
     if getattr(args, "api_base", ""):
         os.environ["KYA_API_BASE"] = args.api_base
+
+
+# ── KYA web 链接 ────────────────────────────────────────
+
+
+DEFAULT_KYA_WEB_BASE = "https://kya.link"
+
+
+def kya_web_base(args: Optional[argparse.Namespace] = None) -> str:
+    """解析 KYA web 站点的 base URL，用于构造 agent → user 交接链接。
+
+    优先级：--web-base > KYA_WEB_BASE > DEFAULT_KYA_WEB_BASE。
+    返回值不带尾斜杠。
+    """
+    if args is not None and getattr(args, "web_base", ""):
+        return str(args.web_base).rstrip("/")
+    env = (os.environ.get("KYA_WEB_BASE") or "").strip().rstrip("/")
+    return env or DEFAULT_KYA_WEB_BASE
+
+
+def build_web_landing_url(
+    *, web_base: str, path: str, fragment_params: dict
+) -> str:
+    """拼接 https://<web_base><path>#k1=v1&k2=v2…，自动 URL-encode。
+
+    用 fragment（#）而不是 query string，让签名 / didit URL 不进 server 日志、
+    不进 referer 头。所有 value 走 urllib.parse.quote 编码。
+    """
+    encoded = "&".join(
+        f"{k}={urllib.parse.quote(str(v), safe='')}"
+        for k, v in fragment_params.items()
+    )
+    return f"{web_base.rstrip('/')}{path}#{encoded}"
