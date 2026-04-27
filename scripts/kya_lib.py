@@ -569,6 +569,65 @@ def kya_list_attestations(
     return _check_response(status, payload, "list_attestations")
 
 
+# ── Provider staking request polling ───────────────────────────────────
+
+
+# Terminal states for a delegated-staking request — matchingEngine writes one
+# of these and stops touching the row. Anything else is still in progress.
+_STAKING_REQUEST_TERMINAL_STATES = {"matched", "no_capacity", "failed"}
+
+
+def kya_list_staking_requests(*, agent_address: str) -> list[dict]:
+    """GET /v1/services/staking/requests?agent_address=…
+
+    Returns the full list of provider_staking_requests for this agent in
+    server order (most recent first). Server-side route normalises the
+    address to lowercase, so case here doesn't matter.
+    """
+    base = _kya_base()
+    status, payload = _http_request(
+        "GET", f"{base}/v1/services/staking/requests?agent_address={agent_address}"
+    )
+    payload = _check_response(status, payload, "list_staking_requests")
+    items = payload.get("items") if isinstance(payload, dict) else None
+    return items if isinstance(items, list) else []
+
+
+def kya_poll_staking_request(
+    *,
+    agent_address: str,
+    request_id: str,
+    interval_sec: int = 5,
+    timeout_sec: int = 300,
+) -> Optional[dict]:
+    """Poll until the named request reaches a terminal status, or timeout.
+
+    Why the request itself rather than the staking attestation:
+      - The attestation list contains every allocation this agent has ever
+        had, not just the one we just asked for; picking "the right one"
+        from the wrong side means racing against historical rows.
+      - The request DTO carries `matched_provider`, `matched_allocation_id`,
+        and `failed_reason` directly, which is exactly what the user wants
+        to see in their terminal output.
+
+    Returns the matched/failed/no_capacity DTO, or None on timeout.
+    """
+    started = time.time()
+    while time.time() - started < timeout_sec:
+        items = kya_list_staking_requests(agent_address=agent_address)
+        for req in items:
+            if not isinstance(req, dict):
+                continue
+            if req.get("id") != request_id:
+                continue
+            status = req.get("status")
+            if status in _STAKING_REQUEST_TERMINAL_STATES:
+                return req
+            break
+        time.sleep(interval_sec)
+    return None
+
+
 def kya_poll_attestation(
     *,
     agent_address: str,

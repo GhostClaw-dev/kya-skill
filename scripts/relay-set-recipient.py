@@ -57,6 +57,7 @@ from kya_lib import (
     get_wallet_address,
     info,
     kya_list_attestations,
+    kya_poll_staking_request,
     kya_request_delegated_staking,
     new_signature_nonce,
     now_unix_seconds,
@@ -215,6 +216,24 @@ def main(argv: Optional[list[str]] = None) -> int:
         action="store_true",
         help="Do not poll relay status after submission.",
     )
+    parser.add_argument(
+        "--no-poll-staking",
+        action="store_true",
+        help=(
+            "Skip polling the delegated-staking request after stage 2 — return"
+            " immediately with status='queued'. Default behaviour polls until"
+            " matched / no_capacity / failed (up to --staking-poll-timeout)."
+        ),
+    )
+    parser.add_argument(
+        "--staking-poll-timeout",
+        type=int,
+        default=300,
+        help=(
+            "Seconds to wait for the staking request to reach a terminal"
+            " status (matched / no_capacity / failed). Default 300s = 5min."
+        ),
+    )
     args = parser.parse_args(argv)
     apply_api_base(args)
 
@@ -292,17 +311,55 @@ def main(argv: Optional[list[str]] = None) -> int:
             chain_id=args.chain_id,
             token=args.token,
         )
-        # 后端响应 shape: { "request": { id, status, worknet_id, amount_wei, ... } }
+        # Server response shape: { "request": { id, status, worknet_id, amount_wei, ... } }
         req_obj = (
             staking_request.get("request") if isinstance(staking_request, dict) else None
         ) or {}
+        request_id = req_obj.get("id")
         step(
             "kya.staking_request.queued",
-            request_id=req_obj.get("id"),
+            request_id=request_id,
             status=req_obj.get("status"),
             worknet_id=req_obj.get("worknet_id"),
             amount_wei=req_obj.get("amount_wei"),
         )
+
+        # Poll the request itself (not the attestation list) so the caller sees
+        # the precise outcome of THIS request — including matched_provider and
+        # matched_allocation_id, which they need to disambiguate from any
+        # historical allocations on the same agent. Skipping this would force
+        # users to manually GET the list endpoint, which is what tripped Cipher
+        # up the first time around.
+        if not args.no_poll_staking and isinstance(request_id, str) and request_id:
+            final_req = kya_poll_staking_request(
+                agent_address=agent,
+                request_id=request_id,
+                interval_sec=5,
+                timeout_sec=max(30, int(args.staking_poll_timeout)),
+            )
+            if final_req is None:
+                step(
+                    "kya.staking_request.timeout",
+                    request_id=request_id,
+                    timeout_sec=args.staking_poll_timeout,
+                )
+                info(
+                    "staking request still in flight after timeout — query "
+                    f"GET /v1/services/staking/requests?agent_address={agent} later",
+                    request_id=request_id,
+                )
+            else:
+                # Replace the queued snapshot with the terminal one so the
+                # final JSON the caller prints reflects what actually happened.
+                staking_request = {"request": final_req}
+                step(
+                    "kya.staking_request.terminal",
+                    request_id=final_req.get("id"),
+                    status=final_req.get("status"),
+                    matched_provider=final_req.get("matched_provider"),
+                    matched_allocation_id=final_req.get("matched_allocation_id"),
+                    failed_reason=final_req.get("failed_reason"),
+                )
 
     print(
         json.dumps(
