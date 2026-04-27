@@ -650,14 +650,14 @@ def kyc_poll_session(
 
 # ── AWP relayer ────────────────────────────────────────
 #
-# AWP 协议官方提供的 gasless 中继：用户对 AWPRegistry / AWPToken 上的
+# AWP 协议官方提供的 gasless 中继：用户对 AWPRegistry 上的
 # EIP-712 typed-data 签名,把签名 POST 给 relayer,relayer 代付 gas
-# 上链。KYA 默认假设用户钱包没有 ETH,所以撮合相关的三类操作
-# (setRecipient / grantDelegate / stake) 全部走 relayer。
+# 上链。KYA skill 只保留撮合相关的两类操作:
+# setRecipient / grantDelegate。provider 质押不走本 skill 的 gasless 路径。
 #
 # 安全说明:
-#  - typed-data 的 domain.verifyingContract 在本模块写死成 AWPRegistry
-#    或由 relayer 在 stake/prepare 里返回,不接受外部覆盖。
+#  - typed-data 的 domain.verifyingContract 在本模块写死成 AWPRegistry,
+#    不接受外部覆盖。
 #  - chainId 默认 8453(Base mainnet),与 KYA 后端校验保持一致。
 #  - skill 不在用户机器上发链上交易,所有上链动作由 AWP relayer 完成。
 
@@ -820,6 +820,9 @@ def relay_set_recipient(
             "chainId": chain_id,
             "user": user_address,
             "recipient": recipient_address,
+            # AWP relayer 当前 schema 要求 deadline 为 JSON number,旧的 string 会
+            # 被 schema 校验拒绝(invalid request body)。typed-data 内部签的还是
+            # uint256,这里只影响线上传输格式。
             "deadline": int(deadline),
             "signature": signature,
         },
@@ -844,54 +847,11 @@ def relay_grant_delegate(
             "chainId": chain_id,
             "user": user_address,
             "delegate": delegate_address,
+            # 同 set-recipient,relayer 不再接受字符串化的 deadline。
             "deadline": int(deadline),
             "signature": signature,
         },
     )
-
-
-def relay_stake_prepare(
-    *,
-    user_address: str,
-    amount_wei: int,
-    lock_seconds: int,
-    chain_id: int = DEFAULT_CHAIN_ID,
-) -> dict:
-    """POST /api/relay/stake/prepare —— 拿到 Permit typed-data 与 submitTo 信息。"""
-    return _post_relay(
-        "/api/relay/stake/prepare",
-        {
-            "chainId": chain_id,
-            "user": user_address,
-            "amount": str(amount_wei),
-            "lockDuration": int(lock_seconds),
-        },
-    )
-
-
-def relay_stake_submit(submit_to: dict, signature: str) -> dict:
-    """把 stake 签名 POST 回 relayer 返回的 submitTo.url。
-
-    接受 prepare 给的 submitTo dict({method,url,body}),把 signature 合并进 body
-    再发出去;只允许 url 落在 AWP_RELAY_BASE 下,避免被诱导成 SSRF。
-    """
-    if not SIG_RE.match(signature):
-        die(f"signature must be 0x followed by 130 hex chars (got: {signature!r})")
-    if not isinstance(submit_to, dict):
-        die("submit_to must be the object returned by stake/prepare")
-    url = submit_to.get("url")
-    method = submit_to.get("method") or "POST"
-    body = submit_to.get("body") or {}
-    if not isinstance(url, str) or not isinstance(body, dict):
-        die("submit_to is missing url/body")
-    if not url.startswith(_awp_relay_base()):
-        die(f"submit_to.url is not under AWP_RELAY_BASE ({url})")
-    body_with_sig = dict(body)
-    body_with_sig["signature"] = signature
-    status, payload = _http_request(method, url, body=body_with_sig, timeout=30)
-    if status >= 400:
-        die(f"AWP relay stake submit failed (status={status}): {payload!r}")
-    return payload if isinstance(payload, dict) else {}
 
 
 def relay_status(tx_hash: str, *, timeout: int = 15) -> dict:

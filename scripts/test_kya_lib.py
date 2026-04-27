@@ -554,7 +554,9 @@ class AwpRelayTypedDataTests(unittest.TestCase):
         self.assertEqual(captured["body"]["chainId"], 8453)
         self.assertEqual(captured["body"]["user"], SAMPLE_ADDR)
         self.assertEqual(captured["body"]["recipient"], SAMPLE_OWNER)
-        self.assertEqual(captured["body"]["deadline"], "1700000000")
+        # AWP relayer 现在要求 deadline 为 JSON number,断言也跟着改成 int。
+        self.assertEqual(captured["body"]["deadline"], 1_700_000_000)
+        self.assertIsInstance(captured["body"]["deadline"], int)
         self.assertEqual(captured["body"]["signature"], SAMPLE_SIG)
         self.assertEqual(res["status"], "submitted")
 
@@ -566,20 +568,6 @@ class AwpRelayTypedDataTests(unittest.TestCase):
                 deadline=1,
                 signature="0xnope",
             )
-
-    def test_relay_stake_submit_blocks_untrusted_url(self) -> None:
-        # AWP relayer 返回的 submitTo.url 必须落在 AWP_RELAY_BASE 域内,
-        # 否则会被脚本拒绝(防 SSRF / 钓鱼 URL)。
-        os.environ["AWP_RELAY_BASE"] = "https://api.awp.sh"
-        try:
-            with self.assertRaises(SystemExit):
-                kya_lib.relay_stake_submit(
-                    {"method": "POST", "url": "https://evil.example.com/relay", "body": {}},
-                    SAMPLE_SIG,
-                )
-        finally:
-            os.environ.pop("AWP_RELAY_BASE", None)
-
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
