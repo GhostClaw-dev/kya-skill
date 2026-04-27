@@ -776,7 +776,15 @@ def relay_set_recipient(
     signature: str,
     chain_id: int = DEFAULT_CHAIN_ID,
 ) -> dict:
-    """POST /api/relay/set-recipient —— relayer 代付 gas 把 setRecipient 上链。"""
+    """POST /api/relay/set-recipient — relayer pays gas and submits on-chain.
+
+    Note: the AWP relayer's request schema requires `deadline` as a JSON
+    number, not a string. The on-chain typed-data still uses uint256
+    serialised as a string (EIP-712 convention) — that path is untouched.
+    Bug history: skill was sending str(deadline) and got "invalid request
+    body" from the relayer. The web (lib/awpRelay.ts) had already worked
+    around this; sync the skill to match.
+    """
     if not SIG_RE.match(signature):
         die(f"signature must be 0x followed by 130 hex chars (got: {signature!r})")
     return _post_relay(
@@ -785,7 +793,7 @@ def relay_set_recipient(
             "chainId": chain_id,
             "user": user_address,
             "recipient": recipient_address,
-            "deadline": str(deadline),
+            "deadline": int(deadline),
             "signature": signature,
         },
     )
@@ -799,6 +807,8 @@ def relay_grant_delegate(
     signature: str,
     chain_id: int = DEFAULT_CHAIN_ID,
 ) -> dict:
+    """POST /api/relay/grant-delegate — see relay_set_recipient docstring for
+    the deadline-must-be-number caveat."""
     if not SIG_RE.match(signature):
         die(f"signature must be 0x followed by 130 hex chars (got: {signature!r})")
     return _post_relay(
@@ -807,7 +817,7 @@ def relay_grant_delegate(
             "chainId": chain_id,
             "user": user_address,
             "delegate": delegate_address,
-            "deadline": str(deadline),
+            "deadline": int(deadline),
             "signature": signature,
         },
     )
