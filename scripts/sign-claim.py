@@ -141,13 +141,18 @@ def _print_handoff_link(*, web_base: str, agent: str, prepared: dict, claim_sig:
         fragment_params=fragment,
     )
 
+    # Print the URL on its own line with no surrounding box characters: terminals
+    # frequently soft-wrap long URLs and users then copy only the first wrapped
+    # line. The marker prefix lets the agent host (and the user's eyes) locate
+    # the full single-line URL even after wrapping.
     print("", file=sys.stderr)
-    print("────── Hand this link to the user ──────", file=sys.stderr)
+    print("HAND THIS URL TO THE USER (single line, do not break):", file=sys.stderr)
+    print("HANDOFF_URL>>>", file=sys.stderr)
     print(url, file=sys.stderr)
-    print("────────────────────────────────────────", file=sys.stderr)
+    print("<<<HANDOFF_URL", file=sys.stderr)
     print(
-        "The link is valid for ~5 minutes (claim signature timestamp window). "
-        "If it expires, re-run this script.",
+        "Valid for ~5 minutes. If it expires, re-run this script. "
+        "The same URL is also in the JSON summary on stdout under 'handoff_url'.",
         file=sys.stderr,
     )
 

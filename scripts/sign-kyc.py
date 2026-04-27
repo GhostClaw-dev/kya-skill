@@ -107,12 +107,16 @@ def _print_handoff_link(
         fragment_params=fragment,
     )
 
+    # See sign-claim.py: avoid box characters around the URL so terminal soft-wrap
+    # can't trick a copy. JSON summary on stdout has the same value at handoff_url.
     print("", file=sys.stderr)
-    print("────── Hand this link to the user ──────", file=sys.stderr)
+    print("HAND THIS URL TO THE USER (single line, do not break):", file=sys.stderr)
+    print("HANDOFF_URL>>>", file=sys.stderr)
     print(url, file=sys.stderr)
-    print("────────────────────────────────────────", file=sys.stderr)
+    print("<<<HANDOFF_URL", file=sys.stderr)
     print(
-        "The landing page will embed Didit and poll KYA for the result.",
+        "The landing page will embed Didit and poll KYA. "
+        "The same URL is also in the JSON summary on stdout under 'handoff_url'.",
         file=sys.stderr,
     )
 
