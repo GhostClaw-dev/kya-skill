@@ -187,6 +187,38 @@ def _post_delegated_staking_request(
     )
 
 
+def _fail_on_unsuccessful_terminal_request(req: dict) -> None:
+    """把服务端 terminal 状态转成明确的人话；业务判断只来自 API 字段。"""
+    status = req.get("status")
+    failed_reason = req.get("failed_reason")
+    request_id = req.get("id")
+    if status == "matched":
+        info(
+            "delegated staking matched",
+            request_id=request_id,
+            matched_provider=req.get("matched_provider"),
+            matched_allocation_id=req.get("matched_allocation_id"),
+        )
+        return
+    if status == "no_capacity":
+        die(
+            "Delegated staking request reached no_capacity: "
+            "当前没有足够 provider 额度可撮合，请稍后重试或补充 provider 容量。"
+            f" request_id={request_id}"
+        )
+    if status == "failed" and failed_reason == "per_agent_cap_exceeded":
+        die(
+            "Delegated staking request failed: "
+            "该 agent 的委托质押累计已经超过 10000 AWP 上限，API 已明确拒绝继续撮合。"
+            f" request_id={request_id}"
+        )
+    if status == "failed":
+        die(
+            "Delegated staking request failed on KYA API: "
+            f"failed_reason={failed_reason or 'unknown'}, request_id={request_id}"
+        )
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     parser = base_parser(__doc__ or "")
     parser.add_argument("--agent", help="Agent EOA. Default: read from awp-wallet receive.")
@@ -323,6 +355,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             worknet_id=req_obj.get("worknet_id"),
             amount_wei=req_obj.get("amount_wei"),
         )
+        if req_obj.get("status") in ("matched", "no_capacity", "failed"):
+            _fail_on_unsuccessful_terminal_request(req_obj)
 
         # Poll the request itself (not the attestation list) so the caller sees
         # the precise outcome of THIS request — including matched_provider and
@@ -360,6 +394,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                     matched_allocation_id=final_req.get("matched_allocation_id"),
                     failed_reason=final_req.get("failed_reason"),
                 )
+                _fail_on_unsuccessful_terminal_request(final_req)
 
     print(
         json.dumps(

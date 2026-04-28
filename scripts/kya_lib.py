@@ -452,6 +452,12 @@ def _check_response(status: int, payload: dict, action: str) -> dict:
     err = payload.get("error", {}) if isinstance(payload, dict) else {}
     code = err.get("code") or "HTTP_ERROR"
     msg = err.get("message") or f"{action} failed with HTTP {status}"
+    if code == "PER_AGENT_CAP_EXCEEDED":
+        die(
+            "[PER_AGENT_CAP_EXCEEDED] delegated_staking_request: "
+            "该 agent 的委托质押累计已经超过 10000 AWP 上限，API 已拒绝入队。"
+            f" 原始信息: {msg}"
+        )
     die(f"[{code}] {action}: {msg}")
     return {}  # unreachable
 
