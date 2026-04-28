@@ -44,7 +44,15 @@ from kya_lib import (
 )
 
 
-KNOWN_ACTIONS = ("twitter_prepare", "twitter_claim", "kyc_init")
+KNOWN_ACTIONS = (
+    "twitter_prepare",
+    "twitter_claim",
+    "telegram_prepare",
+    "telegram_claim",
+    "email_prepare",
+    "email_confirm",
+    "kyc_init",
+)
 
 
 def _parse_timestamp(raw: str) -> int:

@@ -15,6 +15,10 @@ description: >
       print the claim text and X intent URL → take the published tweet URL →
       sign and POST /v1/attestations/twitter/claim → poll attestation list
       until active or revoked.
+    - Email claim: sign EIP-712 Action(email_prepare) → POST
+      /v1/attestations/email/prepare → KYA mails a 6-digit code → ask the
+      user for the code → sign Action(email_confirm) → POST
+      /v1/attestations/email/confirm → poll attestation list until active.
     - KYC initiation: sign EIP-712 KycInit → POST /kyc/sessions → print Didit
       verification URL → poll the session until terminal status.
     - AWP relayer setRecipient: read AWPRegistry.nonces(agent), sign
@@ -26,9 +30,11 @@ description: >
     - Generic signer: sign any EIP-712 typed-data JSON (from file, clipboard,
       or stdin) and emit the 0x signature for downstream tools.
 
-  Trigger keywords: KYA, "Know Your Agent", kya-claim, kya-kyc, "claim X
-  account for agent", "claim Twitter for agent", "Twitter claim KYA", "KYA
-  Twitter sign", "agent X claim", "KYC for agent", "KYA sign", "sign KYA",
+  Trigger keywords: KYA, "Know Your Agent", kya-claim, kya-kyc, kya-email,
+  "claim X account for agent", "claim Twitter for agent", "Twitter claim
+  KYA", "KYA Twitter sign", "agent X claim", "claim email for agent",
+  "bind email to agent", "KYA email verification", "email_prepare",
+  "email_confirm", "KYC for agent", "KYA sign", "sign KYA",
   "kya-sign://" (magic links from KYA web), "EIP-712 sign awp-wallet",
   "sign typed-data with awp-wallet" (when the typed-data domain.name is
   "KYA" or "AWPRegistry"), "KYA setRecipient", "KYA grantDelegate", "KYA
@@ -117,6 +123,7 @@ the KYA web "Send to your agent" banner) asks for any of the following
 *intents*:
 
 - "Claim my X / Twitter account for an agent on KYA" → `scripts/sign-claim.py`
+- "Bind an email to my agent on KYA" → `scripts/sign-email.py`
 - "Run KYC for an agent on KYA" → `scripts/sign-kyc.py`
 - "Set my agent's reward recipient on KYA / start delegated staking" →
   `scripts/relay-set-recipient.py`
@@ -334,6 +341,44 @@ python3 scripts/relay-grant-delegate.py
 `--delegate` defaults to the canonical KyaAllocatorProxy address baked into
 `kya_lib.py`; pass it only if KYA has rotated the proxy.
 
+### S7 · Email claim end-to-end — `scripts/sign-email.py`
+
+Bind a real inbox to the agent EOA. Two EIP-712 signatures
+(`email_prepare` + `email_confirm`) sandwich a 6-digit verification email
+KYA sends through Resend; the user reads the code, hands it back, the
+script signs the second half and KYA writes the `email_claim` attestation.
+
+Unlike Twitter / Telegram, **no public post is involved** — the email
+itself is the proof — so this script does the entire round-trip without
+handing the user a URL.
+
+```bash
+# Interactive (will prompt for email + code):
+python3 scripts/sign-email.py
+
+# Email pre-supplied, prompt only for code:
+python3 scripts/sign-email.py --email me@example.com
+
+# Fully headless / CI (already know the code):
+python3 scripts/sign-email.py --email me@example.com --code 123456 --no-poll
+```
+
+Outputs **JSON** on stdout when finished:
+
+```json
+{
+  "agent_address": "0xabc...",
+  "attestation_id": "att_01J...",
+  "status": "active",
+  "email": "me@example.com",
+  "timed_out": false
+}
+```
+
+Codes expire after ~10 minutes; 5 wrong attempts invalidate the code (the
+script surfaces those as `[EMAIL_CODE_INVALID]` / `[EMAIL_MAX_ATTEMPTS]`).
+If you got rate-limited (`[EMAIL_RESEND_COOLDOWN]`), wait ~60 s and retry.
+
 ## Magic link convention
 
 KYA web encodes the user's intent as `kya-sign://<flow>?<query>`:
@@ -342,6 +387,8 @@ KYA web encodes the user's intent as `kya-sign://<flow>?<query>`:
 |---|---|
 | `kya-sign://twitter-claim?api=<base>&chain=8453` | run `sign-claim.py --api-base <base> --chain-id 8453` |
 | `kya-sign://twitter-claim?api=<base>&tweet=<url>` | run `sign-claim.py --api-base <base> --tweet-url <url>` |
+| `kya-sign://email-claim?api=<base>` | run `sign-email.py --api-base <base>` (prompts for email + code) |
+| `kya-sign://email-claim?api=<base>&email=<addr>` | run `sign-email.py --api-base <base> --email <addr>` (prompts only for code) |
 | `kya-sign://kyc?api=<base>&owner=0x...` | run `sign-kyc.py --api-base <base> --owner 0x...` |
 | `kya-sign://sign?clip=1` | run `sign.py --from-clipboard` |
 | `kya-sign://set-recipient?api=<base>&worknet=<id>` | run `relay-set-recipient.py --api-base <base> --worknet <id>` |

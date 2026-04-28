@@ -324,11 +324,16 @@ def build_action_typed_data(
     if action not in (
         "twitter_prepare",
         "twitter_claim",
+        "telegram_prepare",
+        "telegram_claim",
+        "email_prepare",
+        "email_confirm",
         "delegated_staking_request",
     ):
         die(
             f"unknown action {action!r}; expected one of "
-            "twitter_prepare|twitter_claim|delegated_staking_request"
+            "twitter_prepare|twitter_claim|telegram_prepare|telegram_claim|"
+            "email_prepare|email_confirm|delegated_staking_request"
         )
     return {
         "domain": _eip712_domain(chain_id),
@@ -502,6 +507,54 @@ def kya_claim_twitter(
         },
     )
     return _check_response(status, payload, "twitter_claim")
+
+
+def kya_prepare_email(
+    *,
+    agent_address: str,
+    email: str,
+    signature: str,
+    timestamp: int,
+    nonce: str,
+) -> dict:
+    """POST /v1/attestations/email/prepare
+
+    KYA 收到后给该邮箱寄一封 6 位验证码邮件（默认 10 分钟有效，5 次错码即作废）。
+    返回 { email, resend_available_at, expires_at }；不会写 attestation。
+    """
+    base = _kya_base()
+    status, payload = _http_request(
+        "POST",
+        f"{base}/v1/attestations/email/prepare",
+        headers=_signed_headers(signature, timestamp, nonce),
+        body={"agent_address": agent_address, "email": email},
+    )
+    return _check_response(status, payload, "email_prepare")
+
+
+def kya_confirm_email(
+    *,
+    agent_address: str,
+    email: str,
+    code: str,
+    signature: str,
+    timestamp: int,
+    nonce: str,
+) -> dict:
+    """POST /v1/attestations/email/confirm
+
+    用户读完邮件、把 6 位码交给 agent 后调用。code 不对 / 过期 / 超次都会
+    被服务端拒绝并由 _check_response 抛出对应 KYA 错误码。
+    返回 { attestation_id, status }，正常 status 应该是 "active"。
+    """
+    base = _kya_base()
+    status, payload = _http_request(
+        "POST",
+        f"{base}/v1/attestations/email/confirm",
+        headers=_signed_headers(signature, timestamp, nonce),
+        body={"agent_address": agent_address, "email": email, "code": code},
+    )
+    return _check_response(status, payload, "email_confirm")
 
 
 def awp_to_wei(amount_awp: str) -> str:
