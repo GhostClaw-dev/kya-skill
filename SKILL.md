@@ -27,6 +27,12 @@ description: >
       address first by calling GET /v1/agents/:address/deposit-address.
     - AWP relayer grantDelegate: same shape, primaryType GrantDelegate,
       authorizes KyaAllocatorProxy to allocate on the provider's behalf.
+    - Attestation reveal: sign EIP-712 Action(attestation_reveal) → POST
+      /v1/agents/:address/attestations/reveal → KYA verifies the signature
+      and returns the unredacted metadata (full email, KYC country, …) for
+      a single response. Off-chain only — KYA writes nothing beyond the one-
+      time nonce. Use when the default GET /attestations response shows
+      `email_masked` / hidden country and the owner wants to see plaintext.
     - Generic signer: sign any EIP-712 typed-data JSON (from file, clipboard,
       or stdin) and emit the 0x signature for downstream tools.
 
@@ -35,6 +41,8 @@ description: >
   KYA", "KYA Twitter sign", "agent X claim", "claim email for agent",
   "bind email to agent", "KYA email verification", "email_prepare",
   "email_confirm", "KYC for agent", "KYA sign", "sign KYA",
+  "reveal attestation", "show full email for agent", "show KYC country",
+  "attestation_reveal", "KYA reveal as owner",
   "kya-sign://" (magic links from KYA web), "EIP-712 sign awp-wallet",
   "sign typed-data with awp-wallet" (when the typed-data domain.name is
   "KYA" or "AWPRegistry"), "KYA setRecipient", "KYA grantDelegate", "KYA
@@ -129,6 +137,8 @@ the KYA web "Send to your agent" banner) asks for any of the following
   `scripts/relay-set-recipient.py`
 - "Authorize KyaAllocatorProxy to allocate on my behalf as a provider" →
   `scripts/relay-grant-delegate.py`
+- "Reveal the unredacted email / KYC country for my agent" →
+  `scripts/sign-reveal.py`
 - "Sign this KYA / AWPRegistry typed-data with my wallet" → `scripts/sign.py`
   (generic) or `scripts/sign-action.py` (KYA Action / KycInit shortcut)
 
@@ -341,6 +351,51 @@ python3 scripts/relay-grant-delegate.py
 `--delegate` defaults to the canonical KyaAllocatorProxy address baked into
 `kya_lib.py`; pass it only if KYA has rotated the proxy.
 
+### S8 · Reveal unredacted attestation metadata — `scripts/sign-reveal.py`
+
+KYA's public `GET /v1/agents/:address/attestations` endpoint masks PII in the
+default response (email is reduced to `e***@gmail.com` + `email_domain`, KYC
+country is dropped) so that anyone holding the address can't enumerate the
+owner's contact details by polling. The owner can recover the plaintext for
+their own agent by signing one EIP-712 `Action(attestation_reveal)` with the
+agent EOA — KYA verifies the signature, consumes the nonce, and returns the
+unredacted metadata for that single response. **Off-chain only**: nothing is
+written, no transaction is broadcast.
+
+```bash
+# Reveal everything KYA knows about the agent (all attestation types):
+python3 scripts/sign-reveal.py
+
+# Reveal only the email plaintext:
+python3 scripts/sign-reveal.py --type email_claim
+
+# Reveal only the KYC entry (so country shows up):
+python3 scripts/sign-reveal.py --type kyc
+
+# Explicit agent override (default reads from awp-wallet):
+python3 scripts/sign-reveal.py --agent 0xabc... --type email_claim
+```
+
+Outputs the full reveal response on stdout:
+
+```json
+{
+  "subject": { "address": "0xabc...", "chain_id": 8453, "did": "did:pkh:..." },
+  "attestations": [
+    {
+      "id": "att_01J...",
+      "type": "email_claim",
+      "status": "active",
+      "metadata": { "email": "alice@example.com", "verified_at": "..." }
+    }
+  ],
+  "total": 1
+}
+```
+
+`stderr` carries the same `step` / `info` JSON lines as the other scripts so
+agents can stream live progress without parsing the JSON body.
+
 ### S7 · Email claim end-to-end — `scripts/sign-email.py`
 
 Bind a real inbox to the agent EOA. Two EIP-712 signatures
@@ -390,6 +445,9 @@ KYA web encodes the user's intent as `kya-sign://<flow>?<query>`:
 | `kya-sign://email-claim?api=<base>` | run `sign-email.py --api-base <base>` (prompts for email + code) |
 | `kya-sign://email-claim?api=<base>&email=<addr>` | run `sign-email.py --api-base <base> --email <addr>` (prompts only for code) |
 | `kya-sign://kyc?api=<base>&owner=0x...` | run `sign-kyc.py --api-base <base> --owner 0x...` |
+| `kya-sign://reveal?api=<base>` | run `sign-reveal.py --api-base <base>` (all types) |
+| `kya-sign://reveal?api=<base>&type=email_claim` | run `sign-reveal.py --api-base <base> --type email_claim` |
+| `kya-sign://reveal?api=<base>&type=kyc` | run `sign-reveal.py --api-base <base> --type kyc` |
 | `kya-sign://sign?clip=1` | run `sign.py --from-clipboard` |
 | `kya-sign://set-recipient?api=<base>&worknet=<id>` | run `relay-set-recipient.py --api-base <base> --worknet <id>` |
 | `kya-sign://set-recipient?recipient=0xdeposit...` | run `relay-set-recipient.py --recipient 0xdeposit...` |

@@ -52,6 +52,9 @@ KNOWN_ACTIONS = (
     "email_prepare",
     "email_confirm",
     "kyc_init",
+    # 让 owner 用 agent 私钥换出未脱敏 metadata（email / kyc.country）。
+    # 与 web 的 reveal 流程对齐；只签名、不上链。
+    "attestation_reveal",
 )
 
 

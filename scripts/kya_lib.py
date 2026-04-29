@@ -320,7 +320,13 @@ def build_action_typed_data(
     nonce: str,
     chain_id: int = DEFAULT_CHAIN_ID,
 ) -> dict:
-    """构造 KYA twitter_prepare / twitter_claim 的 typed-data。"""
+    """构造 KYA Action 的 typed-data。
+
+    `attestation_reveal` 是只读语义：让 owner 用 agent 私钥换出未脱敏 metadata
+    （email 明文 / kyc.country 等）。后端默认 GET /v1/agents/:id/attestations
+    会把 PII 字段脱敏；reveal 端点凭这个签名解锁明文，不上链、不写 DB（除 nonce
+    防重放）。
+    """
     if action not in (
         "twitter_prepare",
         "twitter_claim",
@@ -329,11 +335,12 @@ def build_action_typed_data(
         "email_prepare",
         "email_confirm",
         "delegated_staking_request",
+        "attestation_reveal",
     ):
         die(
             f"unknown action {action!r}; expected one of "
             "twitter_prepare|twitter_claim|telegram_prepare|telegram_claim|"
-            "email_prepare|email_confirm|delegated_staking_request"
+            "email_prepare|email_confirm|delegated_staking_request|attestation_reveal"
         )
     return {
         "domain": _eip712_domain(chain_id),
@@ -626,6 +633,37 @@ def kya_list_attestations(
         "GET", f"{base}/v1/agents/{agent_address}/attestations{qs}"
     )
     return _check_response(status, payload, "list_attestations")
+
+
+def kya_reveal_attestations(
+    *,
+    agent_address: str,
+    signature: str,
+    timestamp: int,
+    nonce: str,
+    type_filter: Optional[str] = None,
+) -> dict:
+    """POST /v1/agents/:address/attestations/reveal —— 凭 EIP-712 签名换未脱敏 metadata。
+
+    用途：默认 GET /attestations 会把 email 字段遮罩成 e***@gmail.com、
+    把 kyc.country 删掉，避免"输入地址 → 一键拿到 owner 联系方式"的反查目录效应。
+    Owner 自己想看明文（比如校验绑定的邮箱是否对、回看 KYC 国家），就用这个端点：
+    本地用 agent 私钥签 Action(attestation_reveal) → POST → 后端验签后返回 pii='none'。
+
+    返回与 GET 同形（subject + attestations[]），但 metadata 字段不脱敏。
+    type_filter 可选，把响应收窄到 'email_claim' / 'kyc' 等单一类型。
+    """
+    base = _kya_base()
+    body: dict = {"agent_address": agent_address}
+    if type_filter:
+        body["type"] = type_filter
+    status, payload = _http_request(
+        "POST",
+        f"{base}/v1/agents/{agent_address}/attestations/reveal",
+        headers=_signed_headers(signature, timestamp, nonce),
+        body=body,
+    )
+    return _check_response(status, payload, "attestation_reveal")
 
 
 # ── Provider staking request polling ───────────────────────────────────

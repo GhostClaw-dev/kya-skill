@@ -416,6 +416,85 @@ class AwpToWeiTests(unittest.TestCase):
         self.assertEqual(td["primaryType"], "Action")
         self.assertEqual(td["message"]["action"], "delegated_staking_request")
 
+    def test_action_typed_data_accepts_attestation_reveal(self) -> None:
+        # 与 web/lib/eip712.ts 与 api/src/crypto/eip712.ts 三方对齐：
+        # action 白名单必须含 attestation_reveal，否则 sign-reveal.py 会被本地校验拦下。
+        td = kya_lib.build_action_typed_data(
+            action="attestation_reveal",
+            agent_address=SAMPLE_ADDR,
+            timestamp=1_700_000_000,
+            nonce="abcdef0123456789",
+            chain_id=8453,
+        )
+        self.assertEqual(td["primaryType"], "Action")
+        self.assertEqual(td["message"]["action"], "attestation_reveal")
+
+
+class RevealTests(unittest.TestCase):
+    """`kya_reveal_attestations` —— POST /v1/agents/:addr/attestations/reveal。"""
+
+    def setUp(self) -> None:
+        os.environ["KYA_API_BASE"] = "https://kya.test"
+
+    def tearDown(self) -> None:
+        os.environ.pop("KYA_API_BASE", None)
+
+    def test_reveal_posts_signed_headers_and_body(self) -> None:
+        captured: dict = {}
+
+        def fake_request(method, url, headers=None, body=None, timeout=20):
+            captured.update(method=method, url=url, headers=headers, body=body)
+            return 200, {
+                "subject": {"address": SAMPLE_ADDR, "chain_id": 8453, "did": "did:pkh:..."},
+                "attestations": [
+                    {
+                        "id": "att_x",
+                        "type": "email_claim",
+                        "status": "active",
+                        # reveal 端点必须返回未脱敏的明文 email，而不是 email_masked。
+                        "metadata": {"email": "alice@example.com"},
+                    }
+                ],
+                "total": 1,
+            }
+
+        with mock.patch.object(kya_lib, "_http_request", side_effect=fake_request):
+            res = kya_lib.kya_reveal_attestations(
+                agent_address=SAMPLE_ADDR,
+                signature=SAMPLE_SIG,
+                timestamp=42,
+                nonce="cafebabecafebabe",
+                type_filter="email_claim",
+            )
+
+        self.assertEqual(captured["method"], "POST")
+        self.assertEqual(
+            captured["url"], f"https://kya.test/v1/agents/{SAMPLE_ADDR}/attestations/reveal"
+        )
+        self.assertEqual(captured["headers"]["X-Agent-Signature"], SAMPLE_SIG)
+        self.assertEqual(captured["headers"]["X-Agent-Timestamp"], "42")
+        self.assertEqual(captured["body"]["agent_address"], SAMPLE_ADDR)
+        self.assertEqual(captured["body"]["type"], "email_claim")
+        self.assertEqual(res["attestations"][0]["metadata"]["email"], "alice@example.com")
+
+    def test_reveal_omits_type_when_not_provided(self) -> None:
+        # type_filter=None → body 不带 'type' 字段（与 web/agents.ts 行为一致）。
+        captured: dict = {}
+
+        def fake_request(method, url, headers=None, body=None, timeout=20):
+            captured.update(body=body)
+            return 200, {"subject": {}, "attestations": [], "total": 0}
+
+        with mock.patch.object(kya_lib, "_http_request", side_effect=fake_request):
+            kya_lib.kya_reveal_attestations(
+                agent_address=SAMPLE_ADDR,
+                signature=SAMPLE_SIG,
+                timestamp=1,
+                nonce="x" * 16,
+            )
+        self.assertNotIn("type", captured["body"])
+        self.assertEqual(captured["body"]["agent_address"], SAMPLE_ADDR)
+
 
 class PollerTests(unittest.TestCase):
     def setUp(self) -> None:
