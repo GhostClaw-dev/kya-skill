@@ -15,6 +15,11 @@ description: >
       print the claim text and X intent URL → take the published tweet URL →
       sign and POST /v1/attestations/twitter/claim → poll attestation list
       until active or revoked.
+    - Telegram claim: sign EIP-712 → call /v1/attestations/telegram/prepare →
+      print the claim text and a Telegram share intent → take the published
+      message URL (https://t.me/<channel>/<msg_id>, public channel only) →
+      sign and POST /v1/attestations/telegram/claim → poll attestation list
+      until active or revoked. Same shape as Twitter claim.
     - Email claim: sign EIP-712 Action(email_prepare) → POST
       /v1/attestations/email/prepare → KYA mails a 6-digit code → ask the
       user for the code → sign Action(email_confirm) → POST
@@ -37,8 +42,11 @@ description: >
       or stdin) and emit the 0x signature for downstream tools.
 
   Trigger keywords: KYA, "Know Your Agent", kya-claim, kya-kyc, kya-email,
-  "claim X account for agent", "claim Twitter for agent", "Twitter claim
-  KYA", "KYA Twitter sign", "agent X claim", "claim email for agent",
+  kya-telegram, "claim X account for agent", "claim Twitter for agent",
+  "Twitter claim KYA", "KYA Twitter sign", "agent X claim",
+  "claim Telegram for agent", "claim public Telegram channel for agent",
+  "Telegram claim KYA", "KYA Telegram sign", "telegram_prepare",
+  "telegram_claim", "claim email for agent",
   "bind email to agent", "KYA email verification", "email_prepare",
   "email_confirm", "KYC for agent", "KYA sign", "sign KYA",
   "reveal attestation", "show full email for agent", "show KYC country",
@@ -131,6 +139,7 @@ the KYA web "Send to your agent" banner) asks for any of the following
 *intents*:
 
 - "Claim my X / Twitter account for an agent on KYA" → `scripts/sign-claim.py`
+- "Claim a public Telegram channel for an agent on KYA" → `scripts/sign-telegram-claim.py`
 - "Bind an email to my agent on KYA" → `scripts/sign-email.py`
 - "Run KYC for an agent on KYA" → `scripts/sign-kyc.py`
 - "Set my agent's reward recipient on KYA / start delegated staking" →
@@ -235,6 +244,42 @@ Outputs **JSON** on stdout when finished:
 
 `stderr` carries human progress (`{"step": "sign.ok", ...}`, `{"info": "..."}`)
 so wrappers can stream live status without parsing the final JSON line.
+
+### S1.5 · Telegram claim end-to-end — `scripts/sign-telegram-claim.py`
+
+Same shape as S1 (Twitter), but for **public Telegram channels** the agent
+owner controls. Signs the two EIP-712 payloads, prints the claim text and a
+Telegram share intent URL, takes the published message URL on stdin (or via
+`--message-url`), submits the claim, and polls until active.
+
+The published message must live in a **public** channel (`https://t.me/<channel>/<msg_id>`).
+KYA does not read private chats — the verifier just fetches the public
+message via the channel's web preview.
+
+```bash
+# Interactive (prints claim text, waits for message URL on stdin):
+python3 scripts/sign-telegram-claim.py
+
+# Headless (already posted the message):
+python3 scripts/sign-telegram-claim.py \
+  --message-url https://t.me/my_agent_channel/42 \
+  --no-poll
+```
+
+Outputs **JSON** on stdout when finished:
+
+```json
+{
+  "agent_address": "0xabc...",
+  "attestation_id": "att_01J...",
+  "status": "active",
+  "message_url": "https://t.me/my_agent_channel/42",
+  "metadata": { "telegram_channel": "my_agent_channel", "message_id": "42" }
+}
+```
+
+`stderr` follows the same `{"step": ..., "info": ...}` format as S1, so the
+same wrapper code can stream both.
 
 ### S2 · KYC initiation — `scripts/sign-kyc.py`
 
@@ -442,6 +487,8 @@ KYA web encodes the user's intent as `kya-sign://<flow>?<query>`:
 |---|---|
 | `kya-sign://twitter-claim?api=<base>&chain=8453` | run `sign-claim.py --api-base <base> --chain-id 8453` |
 | `kya-sign://twitter-claim?api=<base>&tweet=<url>` | run `sign-claim.py --api-base <base> --tweet-url <url>` |
+| `kya-sign://telegram-claim?api=<base>&chain=8453` | run `sign-telegram-claim.py --api-base <base> --chain-id 8453` |
+| `kya-sign://telegram-claim?api=<base>&message=<url>` | run `sign-telegram-claim.py --api-base <base> --message-url <url>` |
 | `kya-sign://email-claim?api=<base>` | run `sign-email.py --api-base <base>` (prompts for email + code) |
 | `kya-sign://email-claim?api=<base>&email=<addr>` | run `sign-email.py --api-base <base> --email <addr>` (prompts only for code) |
 | `kya-sign://kyc?api=<base>&owner=0x...` | run `sign-kyc.py --api-base <base> --owner 0x...` |
