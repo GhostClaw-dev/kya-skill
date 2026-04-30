@@ -9,6 +9,7 @@ use crate::wallet;
 use serde_json::json;
 use std::time::{Duration, Instant};
 
+pub mod attestations;
 pub mod bootstrap;
 pub mod claim_email;
 pub mod claim_telegram;

@@ -66,6 +66,8 @@ enum Command {
     Kyc(cmd::kyc::Args),
     /// Reveal unredacted attestation metadata (off-chain only).
     Reveal(cmd::reveal::Args),
+    /// List active attestations and report delegated-staking eligibility.
+    Attestations(cmd::attestations::Args),
     /// AWPRegistry.setRecipient via AWP relayer (+ optional delegated-staking request).
     SetRecipient(cmd::set_recipient::Args),
     /// AWPRegistry.grantDelegate(KyaAllocatorProxy) via AWP relayer.
@@ -95,6 +97,7 @@ fn main() {
         Command::ClaimEmail(a) => cmd::claim_email::run(&ctx, a),
         Command::Kyc(a) => cmd::kyc::run(&ctx, a),
         Command::Reveal(a) => cmd::reveal::run(&ctx, a),
+        Command::Attestations(a) => cmd::attestations::run(&ctx, a),
         Command::SetRecipient(a) => cmd::set_recipient::run(&ctx, a),
         Command::GrantDelegate(a) => cmd::grant_delegate::run(&ctx, a),
         Command::Sign(a) => cmd::sign::run(&ctx, a),

@@ -232,8 +232,13 @@ fn ensure_verified(api_base: &str, agent: &str) -> Result<Vec<String>> {
         if att.get("status").and_then(|x| x.as_str()) != Some("active") {
             continue;
         }
+        // Twitter / Telegram / Email all qualify as Social. KYC qualifies
+        // as Human. The matching worker enforces "≥1 of either" — keep
+        // both kinds in `via` for the audit log even if redundant.
         match att.get("type").and_then(|x| x.as_str()) {
-            Some("twitter_claim") if !via.iter().any(|s: &String| s == "social") => {
+            Some("twitter_claim" | "telegram_claim" | "email_claim")
+                if !via.iter().any(|s: &String| s == "social") =>
+            {
                 via.push("social".to_string())
             }
             Some("kyc") if !via.iter().any(|s: &String| s == "human") => {
@@ -243,14 +248,25 @@ fn ensure_verified(api_base: &str, agent: &str) -> Result<Vec<String>> {
         }
     }
     if via.is_empty() {
+        // Hand the calling agent a structured option list so it surfaces
+        // the four verification methods to the owner instead of picking
+        // one (which would be a paternalism failure — see SKILL.md rules).
+        let options = serde_json::json!([
+            {"kind":"social","method":"twitter","label":"Twitter (X) — public tweet","command":"kya-agent claim-twitter"},
+            {"kind":"social","method":"telegram","label":"Telegram — public-channel post","command":"kya-agent claim-telegram"},
+            {"kind":"social","method":"email","label":"Email — 6-digit code","command":"kya-agent claim-email"},
+            {"kind":"human","method":"kyc","label":"KYC — Didit selfie + ID","command":"kya-agent kyc --owner <OWNER_ADDR>"}
+        ]);
         return Err(KyaError::new(
             ErrorKind::NotVerified,
-            format!(
-                "Agent {agent} has no active Social or Human verification yet. \
-                 Run `kya-agent claim-twitter` (Social) or `kya-agent kyc` (Human), then retry."
-            ),
+            "Agent must complete at least one verification before delegated staking.",
         )
-        .with_hint("delegated staking requires at least one of {twitter_claim, kyc}=active"));
+        .with_hint("ask the owner to pick one of the four options; do not pick for them")
+        .with_extras(serde_json::json!({
+            "next_action": "choose_verification",
+            "active_kinds": [],
+            "options": options,
+        })));
     }
     Ok(via)
 }

@@ -37,11 +37,30 @@ fn emit_stderr(key: &str, value: &str, fields: Value) {
 /// Print the success terminal JSON. Caller composes the body; this helper
 /// just stamps `_internal` and prints to stdout.
 pub fn ok<T: Serialize>(body: T, next_action: &str, next_command: Option<&str>) {
+    ok_extra(body, next_action, next_command, None);
+}
+
+/// Same as `ok` but lets the caller stash extra fields under `_internal`
+/// (e.g. `handoff`, `options`, `suggested_journey`). Pass a JSON object;
+/// non-object values are ignored.
+pub fn ok_extra<T: Serialize>(
+    body: T,
+    next_action: &str,
+    next_command: Option<&str>,
+    extras: Option<Value>,
+) {
     let mut value = serde_json::to_value(&body).unwrap_or_else(|_| json!({}));
-    let internal = match next_command {
+    let mut internal = match next_command {
         Some(cmd) => json!({ "next_action": next_action, "next_command": cmd }),
         None => json!({ "next_action": next_action }),
     };
+    if let Some(Value::Object(map)) = extras {
+        if let Value::Object(int_map) = &mut internal {
+            for (k, v) in map {
+                int_map.insert(k, v);
+            }
+        }
+    }
     if let Value::Object(map) = &mut value {
         map.insert("_internal".to_string(), internal);
     } else {
@@ -62,13 +81,21 @@ pub fn emit_error(e: &KyaError) {
     if let Some(h) = &e.hint {
         err_obj["hint"] = json!(h);
     }
+    let mut internal = json!({
+        "next_action": "see_error_table",
+        "next_command": "kya-agent preflight"
+    });
+    if let Some(Value::Object(map)) = &e.extras {
+        if let Value::Object(int_map) = &mut internal {
+            for (k, v) in map {
+                int_map.insert(k.clone(), v.clone());
+            }
+        }
+    }
     let payload = json!({
         "ok": false,
         "error": err_obj,
-        "_internal": {
-            "next_action": "see_error_table",
-            "next_command": "kya-agent preflight"
-        }
+        "_internal": internal,
     });
     println!("{}", payload);
     let _ = writeln!(std::io::stderr(), "{}", json!({ "error": e.to_string() }));

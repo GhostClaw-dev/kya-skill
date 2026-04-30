@@ -103,6 +103,138 @@ a single Rust binary that talks to the public KYA API and the AWP relayer.
 8. **Magic links → `kya-agent open <url>`.** When KYA web hands the user a
    `kya-sign://...` URL, do not translate query params into flags
    manually. The binary parses and dispatches; that's its only job.
+9. **AWP registration is mandatory.** KYA is a subnet of AWP. If
+   `kya-agent preflight` returns `AWP_NOT_REGISTERED`, do **not** attempt
+   any KYA flow — hand off to [awp-skill](https://github.com/awp-core/awp-skill)
+   for free gasless onboarding (one `setRecipient(self)` via relay) and
+   only resume KYA after preflight returns `ready`.
+
+## Prerequisites — AWP first
+
+KYA is a subnet of the AWP network. Every flow assumes the agent EOA is
+already registered on AWPRegistry. Two paths land here:
+
+- ✅ **Came from awp-skill / awp.pro** (most users). Registration is
+  done; `preflight` passes silently.
+- ❌ **KYA-first**. `preflight` returns `AWP_NOT_REGISTERED` with
+  `_internal.handoff.skill = "awp"`. Install awp-skill, run its
+  onboarding (free, gasless), then re-run preflight.
+
+`kya-agent` does **not** implement AWP onboarding itself — that lives
+in awp-skill. Single source of truth, no duplication.
+
+## Canonical journey — "I want delegated staking"
+
+This is the dominant reason owners arrive at KYA: another worknet's
+skill (predict, community, …) checked their stake, found it
+insufficient, and bounced them here for KYA's delegated-staking service.
+KYA stakes on their behalf if they pass at least one verification.
+
+**Walk owners through these steps in order. Stop at every [STOP].**
+
+### Step 0 — preflight
+
+```sh
+kya-agent preflight
+```
+
+- `_internal.next_action = "ready"` → continue to Step 1.
+- `_internal.next_action = "register_on_awp"` → **[STOP]**: bounce to
+  awp-skill onboarding (see Prerequisites). Resume only when preflight
+  returns ready.
+- Any other failure → surface `error.code` per the recovery table.
+
+### Step 1 — query existing attestations
+
+```sh
+kya-agent attestations
+```
+
+Branches on `_internal.next_action`:
+
+- **`ready_for_delegated_staking`** (any active twitter_claim /
+  telegram_claim / email_claim / kyc) → **skip to Step 3.** Don't ask
+  the owner to verify again — they already did.
+- **`choose_verification`** (no active attestation) → continue to Step 2.
+
+### Step 2 — owner picks a verification path
+
+The `attestations` response carries `_internal.options` — the four
+canonical methods. **[STOP]** — present them and let the owner choose.
+**Never pick for them.**
+
+```
+You don't have any active KYA verification yet. Pick one:
+  A) Twitter (X) — public tweet
+  B) Telegram — public-channel post
+  C) Email — 6-digit code (no public post)
+  D) KYC — Didit selfie + ID (heavier, satisfies Human tier)
+
+A/B/C give the Social tier; D gives the Human tier. Either is enough
+for delegated staking.
+```
+
+After choice, run the matching command (the binary's `command` field).
+For Twitter / Telegram / Email / KYC the binary returns a `handoff_url`:
+
+```sh
+kya-agent claim-twitter        # or claim-telegram / claim-email / kyc
+# → outputs { handoff_url, _internal.next_action: "post_tweet_then_resubmit" } etc.
+```
+
+**[STOP]** — give the URL to the owner:
+
+> Open this link in your browser: `<handoff_url>`. KYA web takes care
+> of the rest — you don't need to paste anything back to me. When
+> you're done, tell me and I'll continue.
+
+After the owner says they're done, run `kya-agent attestations` again.
+If the new attestation isn't active, **[STOP]** and ask the owner to
+re-check the browser flow before retrying.
+
+### Step 3 — execute delegated staking
+
+**[STOP]** — confirm the parameters:
+
+```
+About to request delegated staking:
+  agent       0xabc...
+  worknet     <id>            ← typically supplied by the worknet skill that bounced you here
+  amount      <N> AWP         ← also worknet-determined; per-agent cap is 10 000 AWP
+
+This will:
+  1. Sign AWPRegistry.SetRecipient → relay broadcasts (gasless, no ETH).
+  2. Sign KYA Action(delegated_staking_request) → KYA queues the matching worker.
+
+Proceed?
+```
+
+If the owner doesn't know the amount or worknet, **[STOP]** and tell
+them to go back to the originating worknet skill — different worknets
+have different stake requirements; KYA does not pick.
+
+After confirmation:
+
+```sh
+kya-agent set-recipient --worknet <ID> --amount <N>
+```
+
+The binary re-checks verification (defense-in-depth — the server gates
+on this too) and, if green, runs both stages and polls for terminal
+status.
+
+### Step 4 — terminal status
+
+| `_internal.next_action` | Action |
+|---|---|
+| `matched` | Report `matched_provider` and `matched_allocation_id`. Done. |
+| `no_capacity` | **[STOP]**: tell owner no provider has free capacity right now. Surface verbatim — do not retry in a tight loop. |
+| terminal `failed` with `failed_reason: per_agent_cap_exceeded` | **[STOP]**: this agent already has ≥10 000 AWP delegated-staked. Cannot stack more. |
+| terminal `failed` (other) | **[STOP]**: surface `failed_reason` verbatim. |
+
+For repeat / additive delegated staking (same agent, more AWP) or new
+agents: same journey. Step 1 will skip to Step 3 if verification is
+already active. The 10 000 AWP per-agent cap is enforced server-side.
 
 ## Quick start
 
@@ -149,10 +281,11 @@ dispatched command before it runs.
 
 | Subcommand | Purpose |
 |---|---|
-| `preflight` | Self-check (awp-wallet, KYA reachable, RPC reachable). Run first. |
+| `preflight` | Self-check (awp-wallet, KYA reachable, RPC reachable, AWP registration). Run first. |
 | `bootstrap` | First-run alias of `preflight` plus an onboarding hint. |
 | `smoke-test` | Non-destructive probe — never signs, never POSTs. CI-safe. |
 | `open <url>` | Parse `kya-sign://...` and dispatch. Use `--dry-run` to preview. |
+| `attestations` | List active attestations + delegated-staking eligibility. Step 1 of the canonical journey. |
 | `claim-twitter` | Sign and submit a Twitter (X) claim. TTY interactive: prompts for tweet URL. Piped: requires `--tweet-url`. |
 | `claim-telegram` | Sign and submit a Telegram public-channel claim. `--message-url https://t.me/<channel>/<msg_id>`. |
 | `claim-email` | Bind an email. Two signs sandwich a 6-digit code. TTY prompts; piped requires `--email --code`. |
@@ -171,6 +304,7 @@ streams progress on stderr as NDJSON `step` / `info` lines.
 
 | `error.code` | Action |
 |---|---|
+| `AWP_NOT_REGISTERED` | Agent EOA isn't on AWPRegistry yet. KYA is a subnet of AWP — registration is mandatory. Hand off to [awp-skill](https://github.com/awp-core/awp-skill) onboarding (free, gasless). After it lands, re-run `kya-agent preflight`. |
 | `WALLET_NOT_CONFIGURED` | `awp-wallet receive` to check; `awp-wallet init` only if no wallet exists. **Never re-init an existing wallet.** |
 | `WALLET_LOCKED` | Re-run; the binary auto-unlocks. If it still fails: `awp-wallet unlock --scope transfer --duration 3600` and retry. |
 | `AGENT_MISMATCH` | `awp-wallet wallets`, find the right profile, `export AWP_AGENT_ID=<id>` (or pass `--agent-id`), retry. |

@@ -1,6 +1,7 @@
 // Stable error code enum. Strings here MUST match the SKILL.md error table —
 // agents key off them for recovery actions.
 
+use serde_json::Value;
 use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,6 +30,7 @@ pub enum ErrorKind {
     RpcUnreachable,
     RelayUnreachable,
     RelayTxReverted,
+    AwpNotRegistered,
     // Transport
     HttpError,
     // Catch-all
@@ -60,6 +62,7 @@ impl ErrorKind {
             ErrorKind::RpcUnreachable => "RPC_UNREACHABLE",
             ErrorKind::RelayUnreachable => "RELAY_UNREACHABLE",
             ErrorKind::RelayTxReverted => "RELAY_TX_REVERTED",
+            ErrorKind::AwpNotRegistered => "AWP_NOT_REGISTERED",
             ErrorKind::HttpError => "HTTP_ERROR",
             ErrorKind::KyaError => "KYA_ERROR",
             ErrorKind::Internal => "INTERNAL",
@@ -89,7 +92,7 @@ impl ErrorKind {
             | ErrorKind::HttpError
             | ErrorKind::KyaError => 4,
             ErrorKind::RelayUnreachable | ErrorKind::RelayTxReverted => 5,
-            ErrorKind::RpcUnreachable => 6,
+            ErrorKind::RpcUnreachable | ErrorKind::AwpNotRegistered => 6,
             ErrorKind::Internal => 1,
         }
     }
@@ -104,6 +107,10 @@ pub struct KyaError {
     pub server_code: Option<String>,
     /// Recovery hint (one short sentence) for the calling agent.
     pub hint: Option<String>,
+    /// Extra fields merged into the emitted `_internal` of the error JSON.
+    /// Use this to carry `options`, `handoff`, `request_id`, etc. so the
+    /// calling agent can branch without parsing freeform message text.
+    pub extras: Option<Value>,
 }
 
 impl KyaError {
@@ -113,6 +120,7 @@ impl KyaError {
             message: message.into(),
             server_code: None,
             hint: None,
+            extras: None,
         }
     }
 
@@ -123,6 +131,11 @@ impl KyaError {
 
     pub fn with_server_code(mut self, code: impl Into<String>) -> Self {
         self.server_code = Some(code.into());
+        self
+    }
+
+    pub fn with_extras(mut self, extras: Value) -> Self {
+        self.extras = Some(extras);
         self
     }
 
