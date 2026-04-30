@@ -1,6 +1,6 @@
 ---
 name: kya
-version: 0.3.2
+version: 0.3.3
 description: KYA — sign identity & matchmaking attestations, drive AWP relayer set-recipient / grant-delegate. Single-shot, event-driven; never loop.
 platforms: [linux, macos]
 

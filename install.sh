@@ -88,31 +88,19 @@ download() {
   fi
 }
 
-# Resolve latest release tag (GitHub API returns JSON; grep out tag_name).
-echo "Fetching latest release..."
-META_TMP=$(mktemp)
-if ! download "https://api.github.com/repos/${REPO}/releases/latest" "${META_TMP}"; then
-  rm -f "${META_TMP}"
-  echo "Error: could not reach GitHub API" >&2
-  exit 1
-fi
-LATEST=$(grep '"tag_name"' "${META_TMP}" | head -1 | sed 's/.*: "\(.*\)".*/\1/')
-rm -f "${META_TMP}"
-
-if [ -z "${LATEST}" ]; then
-  echo "Error: could not find latest release. Check https://github.com/${REPO}/releases" >&2
-  exit 1
-fi
-
-URL="https://github.com/${REPO}/releases/download/${LATEST}/${ASSET}"
-echo "Downloading kya-agent ${LATEST} for ${OS_NAME}/${ARCH_NAME}..."
+# Skip the JSON-API tag lookup entirely. GitHub's `releases/latest/download/<asset>`
+# URL redirects directly to the latest release's asset blob — we don't need to
+# know the tag, and parsing JSON in /bin/sh is fragile (Hermes Telegram users
+# saw the tag-name regex misfire on a single-line API response in v0.3.1).
+URL="https://github.com/${REPO}/releases/latest/download/${ASSET}"
+echo "Downloading kya-agent latest for ${OS_NAME}/${ARCH_NAME}..."
 echo "  ${URL}"
 
 TMPFILE=$(mktemp)
 if ! download "${URL}" "${TMPFILE}"; then
   rm -f "${TMPFILE}"
   echo "Error: download failed" >&2
-  echo "Available at: https://github.com/${REPO}/releases/tag/${LATEST}" >&2
+  echo "Check https://github.com/${REPO}/releases/latest" >&2
   exit 1
 fi
 # Sanity check: zero-byte download is the symptom we're guarding against.
@@ -144,7 +132,8 @@ if [ "${OS_NAME}" = "darwin" ]; then
 fi
 
 echo ""
-echo "kya-agent ${LATEST} installed to ${TARGET}"
+echo "kya-agent installed to ${TARGET}"
+echo "Run \`kya-agent --version\` to see the installed version."
 
 case ":${PATH}:" in
   *":${INSTALL_DIR}:"*) ;;
