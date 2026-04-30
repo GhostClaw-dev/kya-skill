@@ -61,6 +61,7 @@ metadata:
   openclaw:
     bootstrap: ./scripts/bootstrap.sh
     smoke_test: ./scripts/smoke_test.sh
+    os: [linux, darwin]
     requires:
       bins:
         - kya-agent
@@ -68,17 +69,38 @@ metadata:
         - awp-wallet
       env:
         - KYA_API_BASE
-    primaryEnv: KYA_API_BASE
+    # `envVars[]` mirrors `requires.env` for ClawHub's declaration-vs-code
+    # scanner — every variable kya-agent reads is listed here so the
+    # scanner doesn't flag drift. None of these are KYA-issued secrets;
+    # all have prod defaults except AWP_WALLET_TOKEN (legacy-only).
+    envVars:
+      - name: KYA_API_BASE
+        required: false
+        description: KYA API base URL (default https://kya.link)
+      - name: AWP_RELAY_BASE
+        required: false
+        description: AWP relayer base URL (default https://api.awp.sh)
+      - name: BASE_RPC_URL
+        required: false
+        description: Base RPC URL (default https://mainnet.base.org)
+      - name: KYA_CHAIN_ID
+        required: false
+        description: Chain id (default 8453 = Base mainnet)
+      - name: AWP_WALLET_TOKEN
+        required: false
+        description: awp-wallet session token; only legacy awp-wallet (<v0.17) needs this
     emoji: "🪪"
     homepage: https://github.com/GhostClaw-dev/kya-skill
+    # `kind: download` is the OpenClaw-supported install kind; it pulls
+    # the prebuilt kya-agent binary from the GitHub Release matching
+    # this skill version. Falls back to `bootstrap.sh` for environments
+    # where the macOS Skills installer doesn't run (it itself just
+    # wraps `install.sh` which is the same artifact).
     install:
-      - kind: script
-        run: ./scripts/bootstrap.sh
-    security:
-      wallet_bridge:
-        no_direct_key_access: true
-        signed_payloads_only: true
-        no_network_listeners: true
+      - kind: download
+        url: https://github.com/GhostClaw-dev/kya-skill/releases/latest/download/install.sh
+        bins: [kya-agent]
+        label: Install kya-agent prebuilt binary
 ---
 
 # KYA — Know Your Agent
@@ -143,6 +165,24 @@ recurring task. If a user tries to wire `kya-agent claim-twitter` or
 `kya-agent set-recipient` to cron, refuse and explain — SKILL.md Rule
 #5 is the authoritative line ("One signing flow per invocation. KYA is
 event-driven, not a daemon. Do not loop.").
+
+## Running on OpenClaw
+
+OpenClaw users typically reach this skill from the desktop app's
+chat — TTY available, browser openable. The canonical journey works
+without adaptation; just a couple of OpenClaw-specific notes:
+
+- **Never wire kya-agent to OpenClaw cron.** OpenClaw has built-in
+  scheduled invocations, but every KYA flow is one-shot,
+  human-in-the-loop. Restating SKILL.md Rule #5 because the runtime
+  won't stop a user from doing this themselves.
+- Secrets are injected via the OpenClaw Skills config
+  (`skills.entries.kya.env`) — don't ask the user to type
+  `AWP_WALLET_TOKEN` in chat. If it's missing, surface the
+  preflight error and tell them to set it in OpenClaw's Skills
+  preferences.
+- `kya-agent open <kya-sign://...>` works the same; OpenClaw can
+  open the resolved URL with the OS default browser if available.
 
 ## Prerequisites — AWP first
 
