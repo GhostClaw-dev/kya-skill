@@ -25,27 +25,38 @@ metadata:
     tags: [identity, attestation, kya, awp]
     category: identity
     requires_toolsets: [terminal]
-    required_environment_variables:
-      - name: KYA_API_BASE
+    requires_tools: [terminal]
+    bootstrap: ./scripts/bootstrap.sh
+    smoke_test: ./scripts/smoke_test.sh
+    # Endpoints + chain id default to prod and rarely need overriding;
+    # surface them via `config[]` so `hermes config migrate` can show the
+    # default and a friendly description, instead of prompting at install
+    # like a required secret.
+    config:
+      - key: kya.api_base
+        description: KYA API base URL. Override only for staging or local dev.
+        default: https://kya.link
         prompt: KYA API base URL
-        help: Default https://kya.link. Override only for staging or local dev.
-        required_for: optional
-      - name: AWP_RELAY_BASE
+      - key: kya.relay_base
+        description: AWP relayer base URL. Used by set-recipient and grant-delegate.
+        default: https://api.awp.sh
         prompt: AWP relayer base URL
-        help: Default https://api.awp.sh. Used by set-recipient and grant-delegate.
-        required_for: optional
-      - name: BASE_RPC_URL
+      - key: kya.base_rpc_url
+        description: Base mainnet RPC URL. Used to read AWPRegistry.isRegistered / nonces.
+        default: https://mainnet.base.org
         prompt: Base mainnet RPC URL
-        help: Default https://mainnet.base.org. Used to read AWPRegistry.nonces(user).
-        required_for: optional
-      - name: KYA_CHAIN_ID
+      - key: kya.chain_id
+        description: EIP-712 chain id. 8453 = Base mainnet.
+        default: "8453"
         prompt: Chain ID
-        help: Default 8453 (Base mainnet).
-        required_for: optional
+    # Only the wallet session token has secret semantics + no default —
+    # keep it as a real env var so Hermes prompts (with TTY) or points
+    # the user at `~/.hermes/.env` (no TTY).
+    required_environment_variables:
       - name: AWP_WALLET_TOKEN
         prompt: awp-wallet session token
-        help: Only legacy awp-wallet (<v0.17) needs this. Newer versions auto-unlock.
-        required_for: optional
+        help: Only legacy awp-wallet (<v0.17) needs this. Newer versions auto-unlock; leave blank.
+        required_for: legacy awp-wallet (<v0.17) only — leave blank for newer wallets
 
   openclaw:
     bootstrap: ./scripts/bootstrap.sh
@@ -108,6 +119,30 @@ a single Rust binary that talks to the public KYA API and the AWP relayer.
    any KYA flow — hand off to [awp-skill](https://github.com/awp-core/awp-skill)
    for free gasless onboarding (one `setRecipient(self)` via relay) and
    only resume KYA after preflight returns `ready`.
+
+## Running on Hermes via messaging surfaces (Telegram / Discord / Slack)
+
+Hermes users frequently reach this skill from a messaging gateway with
+**no TTY and no clickable links**. Adapt the canonical journey:
+
+- The handoff URL produced by `claim-twitter` / `claim-telegram` /
+  `claim-email` / `kyc` must be **emitted as plain text** for the owner
+  to copy into their browser. Do not attempt to "open" the URL — the
+  agent has no display.
+- Any [STOP] that says "tell the owner X" is a chat message you send
+  back over the messaging surface, then you stop and wait for the
+  owner's next message before resuming.
+- Secrets (`AWP_WALLET_TOKEN`) are not collected over messaging — they
+  must already be in `~/.hermes/.env` or the user's local
+  `awp-wallet`. If they're missing, surface the SKILL.md error-table
+  text verbatim instead of asking the user to type the secret.
+
+**This skill is event-driven; never schedule it via `hermes cron`.**
+Each KYA flow is a one-shot human-in-the-loop interaction, not a
+recurring task. If a user tries to wire `kya-agent claim-twitter` or
+`kya-agent set-recipient` to cron, refuse and explain — SKILL.md Rule
+#5 is the authoritative line ("One signing flow per invocation. KYA is
+event-driven, not a daemon. Do not loop.").
 
 ## Prerequisites — AWP first
 
