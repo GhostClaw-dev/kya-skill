@@ -1,6 +1,6 @@
 [package]
 name = "kya-agent"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 description = "KYA — sign identity & matchmaking attestations, drive the AWP relayer for set-recipient / grant-delegate"
 license = "MIT"

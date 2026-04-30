@@ -1,6 +1,6 @@
 ---
 name: kya
-version: 0.3.0
+version: 0.3.1
 description: KYA — sign identity & matchmaking attestations, drive AWP relayer set-recipient / grant-delegate. Single-shot, event-driven; never loop.
 platforms: [linux, macos]
 
@@ -143,6 +143,32 @@ a single Rust binary that talks to the public KYA API and the AWP relayer.
    only resume KYA after preflight returns `ready`.
 
 ## Running on Hermes via messaging surfaces (Telegram / Discord / Slack)
+
+### Installing the skill from inside a Hermes session
+
+Hermes-from-messaging runs the skill loop **inside** a long-running
+Hermes daemon — the `hermes` CLI is **not on PATH** of the agent's
+sandbox. Use the in-loop tool instead:
+
+```
+skill_manage create   # register the cloned kya-skill repo
+skill_view kya        # verify it's loaded
+```
+
+`hermes skills install <repo>` is the **operator-side** install — it
+works only from the host shell where the Hermes daemon was launched.
+Inside the agent loop, always go through `skill_manage`.
+
+### Running on the install.sh side
+
+The `kya-agent` binary itself is downloaded by `install.sh` from
+GitHub Releases. On minimal sandboxes (Hermes containers often lack
+`curl` and `wget`), `install.sh` falls back to `python3` then `node`,
+all of which follow HTTPS 302 redirects properly. If you find
+yourself improvising another download path, that's a bug — open an
+issue and use the existing fallback chain instead.
+
+### What changes from the canonical journey
 
 Hermes users frequently reach this skill from a messaging gateway with
 **no TTY and no clickable links**. Adapt the canonical journey:

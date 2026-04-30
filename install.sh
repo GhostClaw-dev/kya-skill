@@ -47,11 +47,57 @@ else
   ASSET="kya-agent-${OS_NAME}-${ARCH_NAME}"
 fi
 
-# Resolve latest release tag.
+# Download helper. Tries curl → wget → python3 → node so the script
+# works on minimal sandboxes that ship only one of these (Hermes
+# Telegram / Discord runners often lack curl). All four paths follow
+# HTTPS 302 redirects (GitHub release artifacts always redirect).
+download() {
+  url="$1"
+  out="$2"
+  if   command -v curl    >/dev/null 2>&1; then
+    curl -fsSL -o "${out}" "${url}"
+  elif command -v wget    >/dev/null 2>&1; then
+    wget -qO "${out}" "${url}"
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c "import sys, urllib.request; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])" "${url}" "${out}"
+  elif command -v node    >/dev/null 2>&1; then
+    # Node fallback. Uses https (not http) and follows up to 5 redirects.
+    node -e "
+      const https = require('https');
+      const fs = require('fs');
+      const url = require('url');
+      const get = (u, redirects = 5) => {
+        https.get(u, (res) => {
+          if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+            if (redirects <= 0) { console.error('too many redirects'); process.exit(1); }
+            res.resume();
+            get(url.resolve(u, res.headers.location), redirects - 1);
+            return;
+          }
+          if (res.statusCode !== 200) { console.error('HTTP ' + res.statusCode); process.exit(1); }
+          const f = fs.createWriteStream(process.argv[2]);
+          res.pipe(f);
+          f.on('finish', () => f.close());
+        }).on('error', (e) => { console.error(e.message); process.exit(1); });
+      };
+      get(process.argv[1]);
+    " "${url}" "${out}"
+  else
+    echo "Error: need curl, wget, python3, or node to fetch kya-agent" >&2
+    return 1
+  fi
+}
+
+# Resolve latest release tag (GitHub API returns JSON; grep out tag_name).
 echo "Fetching latest release..."
-LATEST=$(curl -fsSL -H "Accept: application/vnd.github+json" \
-  "https://api.github.com/repos/${REPO}/releases/latest" \
-  | grep '"tag_name"' | head -1 | sed 's/.*: "\(.*\)".*/\1/')
+META_TMP=$(mktemp)
+if ! download "https://api.github.com/repos/${REPO}/releases/latest" "${META_TMP}"; then
+  rm -f "${META_TMP}"
+  echo "Error: could not reach GitHub API" >&2
+  exit 1
+fi
+LATEST=$(grep '"tag_name"' "${META_TMP}" | head -1 | sed 's/.*: "\(.*\)".*/\1/')
+rm -f "${META_TMP}"
 
 if [ -z "${LATEST}" ]; then
   echo "Error: could not find latest release. Check https://github.com/${REPO}/releases" >&2
@@ -63,11 +109,16 @@ echo "Downloading kya-agent ${LATEST} for ${OS_NAME}/${ARCH_NAME}..."
 echo "  ${URL}"
 
 TMPFILE=$(mktemp)
-HTTP_CODE=$(curl -sSL -w "%{http_code}" -o "${TMPFILE}" "${URL}")
-if [ "${HTTP_CODE}" != "200" ]; then
+if ! download "${URL}" "${TMPFILE}"; then
   rm -f "${TMPFILE}"
-  echo "Error: download failed (HTTP ${HTTP_CODE})" >&2
+  echo "Error: download failed" >&2
   echo "Available at: https://github.com/${REPO}/releases/tag/${LATEST}" >&2
+  exit 1
+fi
+# Sanity check: zero-byte download is the symptom we're guarding against.
+if [ ! -s "${TMPFILE}" ]; then
+  rm -f "${TMPFILE}"
+  echo "Error: downloaded file is empty (likely a redirect that wasn't followed)" >&2
   exit 1
 fi
 
