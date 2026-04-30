@@ -5,9 +5,7 @@
 // schemes, so we parse manually):
 //
 //   kya-sign://twitter-claim?api=<base>&chain=8453
-//   kya-sign://twitter-claim?api=<base>&tweet=<url>
 //   kya-sign://telegram-claim?api=<base>&chain=8453
-//   kya-sign://telegram-claim?api=<base>&message=<url>
 //   kya-sign://email-claim?api=<base>[&email=<addr>]
 //   kya-sign://kyc?api=<base>&owner=0x...
 //   kya-sign://reveal?api=<base>[&type=email_claim|kyc|...]
@@ -115,16 +113,14 @@ pub fn dispatch_command(link: &ParsedLink) -> Result<Option<String>> {
     }
     match link.flow.as_str() {
         "twitter-claim" => {
+            // Web-driven only since v0.3.2. Any `tweet=` param is dropped on
+            // purpose — the canonical path is the handoff URL the binary
+            // emits, which KYA web walks the owner through.
             parts.push("claim-twitter".into());
-            if let Some(t) = p.get("tweet") {
-                parts.push(format!("--tweet-url {}", shell_escape(t)));
-            }
         }
         "telegram-claim" => {
+            // Same as twitter-claim — `message=` param dropped post-v0.3.2.
             parts.push("claim-telegram".into());
-            if let Some(m) = p.get("message") {
-                parts.push(format!("--message-url {}", shell_escape(m)));
-            }
         }
         "email-claim" => {
             parts.push("claim-email".into());
@@ -211,13 +207,15 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_twitter_with_tweet() {
+    fn dispatch_twitter_drops_legacy_tweet_param() {
+        // Magic-link `tweet=` is intentionally ignored since v0.3.2 —
+        // the canonical path is the handoff URL emitted by claim-twitter,
+        // and `--tweet-url` was removed from the binary.
         let l = parse("kya-sign://twitter-claim?api=http://x.test&tweet=https%3A%2F%2Fx.com%2Fa%2Fstatus%2F1")
             .unwrap();
         let cmd = dispatch_command(&l).unwrap().unwrap();
         assert!(cmd.contains("claim-twitter"));
-        assert!(cmd.contains("--tweet-url"));
-        assert!(cmd.contains("https://x.com/a/status/1"));
+        assert!(!cmd.contains("--tweet-url"));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 ---
 name: kya
-version: 0.3.1
+version: 0.3.2
 description: KYA — sign identity & matchmaking attestations, drive AWP relayer set-recipient / grant-delegate. Single-shot, event-driven; never loop.
 platforms: [linux, macos]
 
@@ -276,22 +276,42 @@ for delegated staking.
 ```
 
 After choice, run the matching command (the binary's `command` field).
-For Twitter / Telegram / Email / KYC the binary returns a `handoff_url`:
+For Twitter / Telegram the binary returns a `handoff_url`:
 
 ```sh
-kya-agent claim-twitter        # or claim-telegram / claim-email / kyc
-# → outputs { handoff_url, _internal.next_action: "post_tweet_then_resubmit" } etc.
+kya-agent claim-twitter        # or claim-telegram
+# stdout JSON contains:
+#   handoff_url:      "https://kya.link/verify/social/claim#agent=…&sig=…"
+#   _internal.next_action:  "browser_handoff_then_verify"
+#   _internal.next_command: "kya-agent attestations"
 ```
 
-**[STOP]** — give the URL to the owner:
+**[STOP]** — give the **handoff_url** verbatim to the owner:
 
-> Open this link in your browser: `<handoff_url>`. KYA web takes care
-> of the rest — you don't need to paste anything back to me. When
-> you're done, tell me and I'll continue.
+> Open this link in your browser: `<handoff_url>`. KYA web walks you
+> through publishing the tweet/post and writes the attestation itself.
+> You do NOT need to paste any URL back to me. When KYA web confirms
+> done, tell me and I'll verify.
 
-After the owner says they're done, run `kya-agent attestations` again.
-If the new attestation isn't active, **[STOP]** and ask the owner to
-re-check the browser flow before retrying.
+After the owner says done, run `kya-agent attestations`. If the new
+attestation isn't active, **[STOP]** and ask the owner to re-check the
+browser flow before retrying.
+
+**DO NOT** ask the owner to "paste the tweet URL" / "send me the
+published link" / "give me the X URL". The web-driven flow makes
+that step unnecessary — KYA web handles the URL collection.
+The signatures are baked into the handoff URL fragment; KYA web
+posts the claim itself. If you find yourself drafting "send me the
+tweet link", you've drifted from this skill — re-read the
+**handoff_url** field of the JSON and present THAT instead.
+
+**DO NOT** invent your own variant of the claim text. Copy
+`claim_text` verbatim from the binary's stdout if the owner asks
+what to publish; the text is signed and KYA web will reject any
+deviation.
+
+For Email and KYC, the same `next_command: kya-agent attestations`
+pattern applies after the in-app verification completes.
 
 ### Step 3 — execute delegated staking
 
@@ -365,9 +385,7 @@ kya-agent open "kya-sign://reveal?api=https://kya.link&type=email_claim"
 | URL form | Resolves to |
 |---|---|
 | `kya-sign://twitter-claim?api=<base>` | `claim-twitter` (handoff URL) |
-| `kya-sign://twitter-claim?api=<base>&tweet=<url>` | `claim-twitter --tweet-url <url>` |
-| `kya-sign://telegram-claim?api=<base>` | `claim-telegram` |
-| `kya-sign://telegram-claim?api=<base>&message=<url>` | `claim-telegram --message-url <url>` |
+| `kya-sign://telegram-claim?api=<base>` | `claim-telegram` (handoff URL) |
 | `kya-sign://email-claim?api=<base>` | `claim-email` (prompts for email + code) |
 | `kya-sign://email-claim?api=<base>&email=<addr>` | `claim-email --email <addr>` |
 | `kya-sign://kyc?api=<base>&owner=0x...` | `kyc --owner 0x...` |
@@ -390,8 +408,8 @@ dispatched command before it runs.
 | `smoke-test` | Non-destructive probe — never signs, never POSTs. CI-safe. |
 | `open <url>` | Parse `kya-sign://...` and dispatch. Use `--dry-run` to preview. |
 | `attestations` | List active attestations + delegated-staking eligibility. Step 1 of the canonical journey. |
-| `claim-twitter` | Sign and submit a Twitter (X) claim. TTY interactive: prompts for tweet URL. Piped: requires `--tweet-url`. |
-| `claim-telegram` | Sign and submit a Telegram public-channel claim. `--message-url https://t.me/<channel>/<msg_id>`. |
+| `claim-twitter` | Sign locally, emit a `kya.link/verify/social/claim#…` handoff URL. **Web-driven only** — owner opens the URL, KYA web takes care of the tweet + claim POST. Agent must NOT ask the owner to paste the tweet URL back. |
+| `claim-telegram` | Same shape as `claim-twitter`, public-channel only. |
 | `claim-email` | Bind an email. Two signs sandwich a 6-digit code. TTY prompts; piped requires `--email --code`. |
 | `kyc` | Sign `KycInit`, create a Didit session, return verification URL, optionally poll until terminal. |
 | `reveal` | Off-chain. Sign `Action(attestation_reveal)`, get unredacted metadata. `--type email_claim/kyc/twitter_claim/telegram_claim/staking`. |
@@ -425,7 +443,7 @@ streams progress on stderr as NDJSON `step` / `info` lines.
 | `RELAY_TX_REVERTED` | Check `tx_hash` on basescan. Usually stale nonce — just re-run; the binary re-reads `AWPRegistry.nonces(agent)`. |
 | `KYA_UNREACHABLE` | `curl $KYA_API_BASE/api/healthz` to sanity-check. |
 | `RPC_UNREACHABLE` | Set `BASE_RPC_URL` to a working endpoint and retry. |
-| `INPUT_REQUIRED` | Non-TTY invocation missing a required flag. Re-run with the flag the message asks for (e.g. `--tweet-url`, `--email`, `--code`). |
+| `INPUT_REQUIRED` | Non-TTY invocation missing a required flag. Re-run with the flag the message asks for (e.g. `--email`, `--code`). |
 | `MAGIC_LINK_INVALID` | Check the link is `kya-sign://...` and a known flow. |
 
 For any error not in this table, surface `error.message` verbatim to the

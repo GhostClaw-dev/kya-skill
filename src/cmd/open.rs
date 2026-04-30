@@ -122,10 +122,7 @@ mod tests {
 
     #[test]
     fn split_quoted() {
-        let out = shell_words("kya-agent --tweet-url 'https://x.com/a/status/1'");
-        assert_eq!(
-            out,
-            vec!["kya-agent", "--tweet-url", "https://x.com/a/status/1"]
-        );
+        let out = shell_words("kya-agent reveal --type 'email_claim'");
+        assert_eq!(out, vec!["kya-agent", "reveal", "--type", "email_claim"]);
     }
 }

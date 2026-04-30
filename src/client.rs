@@ -109,25 +109,12 @@ pub fn prepare_twitter(
     )
 }
 
-pub fn claim_twitter(
-    api_base: &str,
-    agent_address: &str,
-    tweet_url: &str,
-    claim_nonce: &str,
-    headers: SignedHeaders<'_>,
-) -> Result<Value> {
-    http_request(
-        Method::POST,
-        &format!("{api_base}/v1/attestations/twitter/claim"),
-        Some(headers),
-        Some(&json!({
-            "agent_address": agent_address,
-            "tweet_url": tweet_url,
-            "nonce": claim_nonce,
-        })),
-        "twitter_claim",
-    )
-}
+// claim_twitter / claim_telegram POST helpers were removed in v0.3.2 —
+// the canonical path is web-driven via the handoff URL emitted by the
+// claim-* subcommands. Signatures land in the URL fragment; KYA web
+// POSTs the claim itself. Re-introducing them here would invite
+// agent-driven drift back to the deleted `--tweet-url` / `--message-url`
+// flow.
 
 pub fn prepare_telegram(
     api_base: &str,
@@ -140,26 +127,6 @@ pub fn prepare_telegram(
         Some(headers),
         Some(&json!({ "agent_address": agent_address })),
         "telegram_prepare",
-    )
-}
-
-pub fn claim_telegram(
-    api_base: &str,
-    agent_address: &str,
-    message_url: &str,
-    claim_nonce: &str,
-    headers: SignedHeaders<'_>,
-) -> Result<Value> {
-    http_request(
-        Method::POST,
-        &format!("{api_base}/v1/attestations/telegram/claim"),
-        Some(headers),
-        Some(&json!({
-            "agent_address": agent_address,
-            "message_url": message_url,
-            "nonce": claim_nonce,
-        })),
-        "telegram_claim",
     )
 }
 
