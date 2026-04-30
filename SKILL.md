@@ -1,6 +1,6 @@
 ---
 name: kya
-version: 0.3.3
+version: 0.3.4
 description: KYA — sign identity & matchmaking attestations, drive AWP relayer set-recipient / grant-delegate. Single-shot, event-driven; never loop.
 platforms: [linux, macos]
 
@@ -280,10 +280,16 @@ For Twitter / Telegram the binary returns a `handoff_url`:
 
 ```sh
 kya-agent claim-twitter        # or claim-telegram
-# stdout JSON contains:
-#   handoff_url:      "https://kya.link/verify/social/claim#agent=…&sig=…"
+# stdout JSON contains EXACTLY (since v0.3.4):
+#   handoff_url:           "https://kya.link/verify/social/claim#agent=…&sig=…"
+#   instructions_for_agent: "Relay handoff_url verbatim … do NOT ask owner to publish/paste"
 #   _internal.next_action:  "browser_handoff_then_verify"
 #   _internal.next_command: "kya-agent attestations"
+#
+# Note: the JSON deliberately does NOT include claim_text, claim_nonce,
+# or expires_at — those are KYA web's concern. If you find yourself
+# wanting to show claim_text to the owner, you've misread the contract:
+# KYA web shows it inside the browser flow once they open handoff_url.
 ```
 
 **[STOP]** — give the **handoff_url** verbatim to the owner:

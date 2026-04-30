@@ -73,13 +73,13 @@ pub fn run(ctx: &Ctx, args: Args) -> Result<()> {
             ("msg_nonce", &n2),
         ],
     );
+    // See claim_twitter.rs — stdout intentionally exposes ONLY handoff_url
+    // so the calling LLM can't drift back to "ask owner to post + paste URL".
     let body = json!({
         "mode": "handoff",
         "agent_address": &agent,
-        "claim_nonce": &claim_nonce,
-        "claim_text": &claim_text,
-        "expires_at": prepared.get("expires_at"),
         "handoff_url": &url,
+        "instructions_for_agent": "Relay handoff_url verbatim to the owner. Do NOT ask the owner to publish a Telegram message or paste any URL back. KYA web walks them through it. After they say done, run `kya-agent attestations`.",
     });
     output::ok(body, "browser_handoff_then_verify", Some("kya-agent attestations"));
     Ok(())

@@ -84,13 +84,19 @@ pub fn run(ctx: &Ctx, args: Args) -> Result<()> {
             ("msg_nonce", &n2),
         ],
     );
+    // Stdout body intentionally exposes ONLY the handoff_url. Earlier
+    // versions also surfaced claim_text / claim_nonce / expires_at, and
+    // calling LLMs (kaito on OpenClaw, observed 2026-04-30) used those
+    // fields to drift back into the deleted "ask owner to publish + paste
+    // tweet URL" pattern. With claim_text gone from the JSON contract,
+    // the agent has no raw material to invent that flow — only handoff_url
+    // can be relayed to the owner. KYA web shows claim_text inside the
+    // browser flow once the URL opens; the agent never needs to see it.
     let body = json!({
         "mode": "handoff",
         "agent_address": &agent,
-        "claim_nonce": &claim_nonce,
-        "claim_text": &claim_text,
-        "expires_at": prepared.get("expires_at"),
         "handoff_url": &url,
+        "instructions_for_agent": "Relay handoff_url verbatim to the owner. Do NOT ask the owner to publish a tweet/post or paste any URL back. KYA web walks them through it. After they say done, run `kya-agent attestations`.",
     });
     output::ok(body, "browser_handoff_then_verify", Some("kya-agent attestations"));
     Ok(())
