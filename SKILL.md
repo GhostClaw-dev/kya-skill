@@ -194,29 +194,31 @@ re-check the browser flow before retrying.
 
 ### Step 3 — execute delegated staking
 
-**[STOP]** — confirm the parameters:
+**[STOP]** — confirm the amount. The worknet is fixed:
 
 ```
 About to request delegated staking:
-  agent       0xabc...
-  worknet     <id>            ← typically supplied by the worknet skill that bounced you here
-  amount      <N> AWP         ← also worknet-determined; per-agent cap is 10 000 AWP
+  agent      0xabc...
+  worknet    845300000012   ← KYA's own subnet; ALWAYS this. Do not pass --worknet.
+  amount     <N> AWP        ← owner picks; per-agent cap is 10 000 AWP
 
 This will:
   1. Sign AWPRegistry.SetRecipient → relay broadcasts (gasless, no ETH).
-  2. Sign KYA Action(delegated_staking_request) → KYA queues the matching worker.
+  2. Sign KYA Action(delegated_staking_request) → KYA stakes from its pool.
 
 Proceed?
 ```
 
-If the owner doesn't know the amount or worknet, **[STOP]** and tell
-them to go back to the originating worknet skill — different worknets
-have different stake requirements; KYA does not pick.
+KYA's delegated staking is always against KYA's own worknet
+(`845300000012`); the binary defaults `--worknet` accordingly. **Do not
+pass `--worknet` and do not ask the owner which worknet** — that's a
+category mistake. Other worknets bouncing the owner to KYA are asking
+for KYA-backed verification, not for KYA to stake into their pool.
 
 After confirmation:
 
 ```sh
-kya-agent set-recipient --worknet <ID> --amount <N>
+kya-agent set-recipient --amount <N>
 ```
 
 The binary re-checks verification (defense-in-depth — the server gates
@@ -269,8 +271,8 @@ kya-agent open "kya-sign://reveal?api=https://kya.link&type=email_claim"
 | `kya-sign://kyc?api=<base>&owner=0x...` | `kyc --owner 0x...` |
 | `kya-sign://reveal?api=<base>` | `reveal` (all types) |
 | `kya-sign://reveal?api=<base>&type=<t>` | `reveal --type <t>` |
-| `kya-sign://set-recipient?api=<base>&worknet=<id>` | `set-recipient --worknet <id>` |
-| `kya-sign://set-recipient?...&amount=<awp>` | `set-recipient ... --amount <awp>` (full delegated-staking) |
+| `kya-sign://set-recipient?api=<base>` | `set-recipient` (stage 1 only — point recipient at KYA deposit) |
+| `kya-sign://set-recipient?api=<base>&amount=<awp>` | `set-recipient --amount <awp>` (full delegated-staking; worknet defaults to 845300000012) |
 | `kya-sign://grant-delegate` | `grant-delegate` |
 | `kya-sign://sign?clip=1` | `sign --from-clipboard` |
 

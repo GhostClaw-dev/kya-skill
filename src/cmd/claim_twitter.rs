@@ -106,8 +106,15 @@ pub fn run(ctx: &Ctx, args: Args) -> Result<()> {
             "expires_at": prepared.get("expires_at"),
             "handoff_url": &url,
         });
-        let next_cmd = "kya-agent claim-twitter --tweet-url <PUBLISHED_TWEET_URL>";
-        output::ok(body, "post_tweet_then_resubmit", Some(next_cmd));
+        // Canonical path is web-driven: the owner clicks the handoff URL,
+        // KYA web walks them through publishing the tweet and POSTs the
+        // claim itself (signatures are already embedded in the URL). The
+        // calling agent does NOT take the tweet URL back from the owner;
+        // it just verifies via `kya-agent attestations` once the owner
+        // says they're done. The legacy `--tweet-url` path is still
+        // supported (see headless submit below) for power users / CI, but
+        // it's not the journey the SKILL.md walks owners through.
+        output::ok(body, "browser_handoff_then_verify", Some("kya-agent attestations"));
         return Ok(());
     }
 

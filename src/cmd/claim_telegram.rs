@@ -88,9 +88,13 @@ pub fn run(ctx: &Ctx, args: Args) -> Result<()> {
             "expires_at": prepared.get("expires_at"),
             "handoff_url": &url,
         });
-        let next_cmd =
-            "kya-agent claim-telegram --message-url <PUBLIC_CHANNEL_MESSAGE_URL>";
-        output::ok(body, "post_telegram_message_then_resubmit", Some(next_cmd));
+        // Web-driven canonical path: signatures are embedded in the URL,
+        // KYA web takes the published Telegram message URL from the owner
+        // and POSTs the claim itself. The calling agent verifies via
+        // `kya-agent attestations` once the owner reports done. The
+        // `--message-url` legacy path stays usable below for headless
+        // submission.
+        output::ok(body, "browser_handoff_then_verify", Some("kya-agent attestations"));
         return Ok(());
     }
 
