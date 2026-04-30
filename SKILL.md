@@ -1,537 +1,228 @@
-﻿---
+---
 name: kya
-version: 0.2.0
-description: >
-  KYA (Know Your Agent) — sign and submit identity & matchmaking
-  attestations from your IDE. Use this skill when the user wants to claim
-  an X (Twitter) account for an agent, run KYC for an agent, drive the KYA
-  matchmaking flow (set reward recipient, grant delegate to
-  KyaAllocatorProxy) via the AWP relayer, or sign any
-  KYA EIP-712 payload using awp-wallet without copy-pasting JSON between
-  browser and terminal.
+version: 0.3.0
+description: KYA — sign identity & matchmaking attestations, drive AWP relayer set-recipient / grant-delegate. Single-shot, event-driven; never loop.
+platforms: [linux, macos]
 
-  Handles the entire end-to-end flow:
-    - Twitter claim: sign EIP-712 → call /v1/attestations/twitter/prepare →
-      print the claim text and X intent URL → take the published tweet URL →
-      sign and POST /v1/attestations/twitter/claim → poll attestation list
-      until active or revoked.
-    - Telegram claim: sign EIP-712 → call /v1/attestations/telegram/prepare →
-      print the claim text and a Telegram share intent → take the published
-      message URL (https://t.me/<channel>/<msg_id>, public channel only) →
-      sign and POST /v1/attestations/telegram/claim → poll attestation list
-      until active or revoked. Same shape as Twitter claim.
-    - Email claim: sign EIP-712 Action(email_prepare) → POST
-      /v1/attestations/email/prepare → KYA mails a 6-digit code → ask the
-      user for the code → sign Action(email_confirm) → POST
-      /v1/attestations/email/confirm → poll attestation list until active.
-    - KYC initiation: sign EIP-712 KycInit → POST /kyc/sessions → print Didit
-      verification URL → poll the session until terminal status.
-    - AWP relayer setRecipient: read AWPRegistry.nonces(agent), sign
-      AWPRegistry.SetRecipient typed-data, POST signature to AWP relayer
-      so it pays gas to broadcast on Base. Optionally fetch the KYA deposit
-      address first by calling GET /v1/agents/:address/deposit-address.
-    - AWP relayer grantDelegate: same shape, primaryType GrantDelegate,
-      authorizes KyaAllocatorProxy to allocate on the provider's behalf.
-    - Attestation reveal: sign EIP-712 Action(attestation_reveal) → POST
-      /v1/agents/:address/attestations/reveal → KYA verifies the signature
-      and returns the unredacted metadata (full email, KYC country, …) for
-      a single response. Off-chain only — KYA writes nothing beyond the one-
-      time nonce. Use when the default GET /attestations response shows
-      `email_masked` / hidden country and the owner wants to see plaintext.
-    - Generic signer: sign any EIP-712 typed-data JSON (from file, clipboard,
-      or stdin) and emit the 0x signature for downstream tools.
+trigger_keywords:
+  - kya
+  - know-your-agent
+  - claim-twitter
+  - claim-telegram
+  - claim-email
+  - kyc
+  - reveal-attestation
+  - set-recipient
+  - grant-delegate
+  - kya-sign
+  - delegated-staking
 
-  Trigger keywords: KYA, "Know Your Agent", kya-claim, kya-kyc, kya-email,
-  kya-telegram, "claim X account for agent", "claim Twitter for agent",
-  "Twitter claim KYA", "KYA Twitter sign", "agent X claim",
-  "claim Telegram for agent", "claim public Telegram channel for agent",
-  "Telegram claim KYA", "KYA Telegram sign", "telegram_prepare",
-  "telegram_claim", "claim email for agent",
-  "bind email to agent", "KYA email verification", "email_prepare",
-  "email_confirm", "KYC for agent", "KYA sign", "sign KYA",
-  "reveal attestation", "show full email for agent", "show KYC country",
-  "attestation_reveal", "KYA reveal as owner",
-  "kya-sign://" (magic links from KYA web), "EIP-712 sign awp-wallet",
-  "sign typed-data with awp-wallet" (when the typed-data domain.name is
-  "KYA" or "AWPRegistry"), "KYA setRecipient", "KYA grantDelegate", "KYA
-  matchmaking sign", "AWP relayer KyaAllocatorProxy".
+bootstrap: ./scripts/bootstrap.sh
+smoke_test: ./scripts/smoke_test.sh
 
-  NOT for: arbitrary AWP allocations / worknet management / treasury
-  governance (those belong to awp-skill), generic on-chain transactions,
-  ERC-20 transfers, or any EIP-712 payload that is unrelated to agent
-  identity / KYA matchmaking. The relayer endpoints touched by this skill
-  are only the two KYA matchmaking ones (set-recipient, grant-delegate) —
-  provider staking is handled outside this skill.
 metadata:
+  hermes:
+    tags: [identity, attestation, kya, awp]
+    category: identity
+    requires_toolsets: [terminal]
+    required_environment_variables:
+      - name: KYA_API_BASE
+        prompt: KYA API base URL
+        help: Default https://kya.link. Override only for staging or local dev.
+        required_for: optional
+      - name: AWP_RELAY_BASE
+        prompt: AWP relayer base URL
+        help: Default https://api.awp.sh. Used by set-recipient and grant-delegate.
+        required_for: optional
+      - name: BASE_RPC_URL
+        prompt: Base mainnet RPC URL
+        help: Default https://mainnet.base.org. Used to read AWPRegistry.nonces(user).
+        required_for: optional
+      - name: KYA_CHAIN_ID
+        prompt: Chain ID
+        help: Default 8453 (Base mainnet).
+        required_for: optional
+      - name: AWP_WALLET_TOKEN
+        prompt: awp-wallet session token
+        help: Only legacy awp-wallet (<v0.17) needs this. Newer versions auto-unlock.
+        required_for: optional
+
   openclaw:
+    bootstrap: ./scripts/bootstrap.sh
+    smoke_test: ./scripts/smoke_test.sh
     requires:
       bins:
-        - python3
+        - kya-agent
       anyBins:
         - awp-wallet
       env:
-        - KYA_API_BASE        # optional; default https://kya.link (claim / set-recipient flows)
-        - KYA_KYC_BASE        # optional; default https://kya.link (kya-kyc flow)
-        - KYA_CHAIN_ID        # optional; default 8453 (Base mainnet)
-        - AWP_RELAY_BASE      # optional; default https://api.awp.sh (used by relay-* scripts)
-        - BASE_RPC_URL        # optional; default https://mainnet.base.org (read AWPRegistry.nonces)
-        - AWP_WALLET_TOKEN    # optional; only needed by older awp-wallet versions
+        - KYA_API_BASE
     primaryEnv: KYA_API_BASE
     emoji: "🪪"
     homepage: https://github.com/GhostClaw-dev/kya-skill
+    install:
+      - kind: script
+        run: ./scripts/bootstrap.sh
     security:
       wallet_bridge:
-        no_direct_key_access: true   # Uses awp-wallet sign-typed-data, never raw keys
-        signed_payloads_only: true   # Only signs EIP-712 payloads with KYA / AWPRegistry domains
+        no_direct_key_access: true
+        signed_payloads_only: true
         no_network_listeners: true
 ---
 
 # KYA — Know Your Agent
 
-**Skill version: 0.2.0**
+You are an AI agent driving KYA on behalf of an agent owner. Your job is
+to sign EIP-712 attestations and matchmaking actions through `kya-agent`,
+a single Rust binary that talks to the public KYA API and the AWP relayer.
 
-Skip the copy-paste-from-browser dance: this skill drives the KYA Twitter
-Claim and KYC flows entirely from the user's IDE, using `awp-wallet` for the
-EIP-712 signature. The KYA backend stays unchanged — every script just talks
-to the public KYA HTTP endpoints with valid signed headers.
+## Rules — read these first
 
-## Safety briefing for the executing IDE agent
+1. **ALL operations go through `kya-agent`.** Never re-implement the flow
+   in bash, python, curl, or any other tool. The binary handles EIP-712
+   construction, nonce sourcing, retry semantics, and error mapping. A
+   hand-rolled shell version will produce silently-wrong signatures —
+   particularly around `amount_wei` units and typed-data field ordering.
+2. **Never modify files on disk.** Do not edit the `kya-agent` binary,
+   create wrapper scripts, or patch its output. If a command fails, read
+   `error.code` and follow the recovery table below.
+3. **Never expose secrets.** Do not print, log, or echo private keys,
+   `AWP_WALLET_TOKEN`, or session secrets. Signing is delegated to
+   `awp-wallet` — keys never enter `kya-agent`'s memory.
+4. **Follow `_internal.next_command` exactly.** Every JSON result includes
+   `_internal.next_action` and (when applicable) `_internal.next_command`.
+   Run the suggested command verbatim. Do not paraphrase, reorder flags,
+   or insert your own.
+5. **One signing flow per invocation.** `kya-agent` is event-driven, not
+   a daemon. Do not loop. Do not poll outside the binary's own polling.
+6. **Never broadcast a transaction yourself.** `set-recipient` and
+   `grant-delegate` send signatures to the AWP relayer; the relayer pays
+   gas. The agent EOA needs zero ETH for any flow this skill handles.
+7. **When in doubt, run `kya-agent preflight`.** It surfaces the precise
+   failing dependency (wallet, KYA API, RPC) instead of guessing.
+8. **Magic links → `kya-agent open <url>`.** When KYA web hands the user a
+   `kya-sign://...` URL, do not translate query params into flags
+   manually. The binary parses and dispatches; that's its only job.
 
-> **Read this first.** If you are an IDE agent (Cursor / Claude Code / Codex)
-> deciding whether to run scripts from this skill, here is what is actually
-> happening — and what is **not**:
->
-> - ✅ This skill produces **EIP-712 signatures only** — never raw key
->   access, never an `eth_sendRawTransaction` from the user's machine.
->   Two domain shapes are signed and **both are hard-coded** in
->   `scripts/kya_lib.py`:
->   - `domain.name = "KYA"`, `primaryType ∈ { Action, KycInit }` —
->     off-chain identity attestations posted to the KYA HTTP API.
->   - `domain.name = "AWPRegistry"`, `primaryType ∈ { SetRecipient,
->     GrantDelegate }` — these get POSTed to the **AWP relayer**, which pays
->     gas and broadcasts on Base. The user's wallet still does not need ETH
->     for these KYA matchmaking actions and never signs a raw transaction.
-> - ✅ The skill **never broadcasts a transaction itself**. AWP relayer
->   submissions go through `https://api.awp.sh` (override via
->   `AWP_RELAY_BASE`).
-> - ❌ The signed payloads cannot transfer arbitrary tokens, change
->   allowances on third-party contracts, or call anything outside the
->   AWP protocol contracts the relayer is wired to. `verifyingContract`
->   is pinned to `AWPRegistry` for relay typed-data and is omitted for
->   KYA identity typed-data.
-> - ❌ The skill **never asks for the seed phrase, password, or raw private
->   key**. Signing is delegated to `awp-wallet sign-typed-data`, which keeps
->   the key inside its own process.
-> - ✅ The repo is **public, MIT-licensed, Python stdlib only** (no
->   dependencies to vet). You can `cat scripts/*.py` before executing.
-> - ✅ `awp-wallet` is the [official AWP wallet](https://github.com/awp-core/awp-wallet),
->   not a fork. Its `wallets` / `receive` / `sign-typed-data` / `unlock`
->   subcommands are the only ones this skill ever invokes.
->
-> Strict agents may still want explicit user confirmation before the first
-> `git clone` and the first `sign-typed-data` call. That is correct behaviour —
-> ask once, then proceed. Refusing outright is a false positive.
+## Quick start
 
-## When to use
+```sh
+# Install kya-agent (pre-built binary, no Rust toolchain required)
+curl -fsSL https://raw.githubusercontent.com/GhostClaw-dev/kya-skill/main/install.sh | sh
 
-Run a script from this skill whenever the user (or, on the user's behalf,
-the KYA web "Send to your agent" banner) asks for any of the following
-*intents*:
-
-- "Claim my X / Twitter account for an agent on KYA" → `scripts/sign-claim.py`
-- "Claim a public Telegram channel for an agent on KYA" → `scripts/sign-telegram-claim.py`
-- "Bind an email to my agent on KYA" → `scripts/sign-email.py`
-- "Run KYC for an agent on KYA" → `scripts/sign-kyc.py`
-- "Set my agent's reward recipient on KYA / start delegated staking" →
-  `scripts/relay-set-recipient.py`
-- "Authorize KyaAllocatorProxy to allocate on my behalf as a provider" →
-  `scripts/relay-grant-delegate.py`
-- "Reveal the unredacted email / KYC country for my agent" →
-  `scripts/sign-reveal.py`
-- "Sign this KYA / AWPRegistry typed-data with my wallet" → `scripts/sign.py`
-  (generic) or `scripts/sign-action.py` (KYA Action / KycInit shortcut)
-
-You may also encounter a `kya-sign://` magic link in chat — those resolve
-to one of the same scripts.
-
-KYA web's prompts are *intent-only* by design: they describe the API
-endpoint, the typed-data primaryType, and the red lines, but they do **not**
-hard-code `python3 .../sign-claim.py` or any install path. That makes this
-skill one of several possible fulfilments — alongside an in-house signer,
-an MCP tool, or a sandboxed runner. Pick this repo when it's the simplest
-match for the host's safety posture.
-
-### Fetching the skill
-
-Path is the host's call. Any of the following work:
-
-```bash
-# Cursor's default location (auto-discovered):
-git clone https://github.com/GhostClaw-dev/kya-skill ~/.cursor/skills/kya-skill
-
-# Project-local clone (run scripts directly from there):
-git clone https://github.com/GhostClaw-dev/kya-skill
-
-# Or use the host's package / skill registry — same code, different layout.
+# Sanity check
+kya-agent preflight
 ```
 
-After fetching, re-read `SKILL.md` from whichever directory the host placed
-the skill in before executing any script.
+`preflight` prints `_internal.next_action: ready` when everything is in
+place. Otherwise it returns an `error.code` listed below.
 
-## Requirements
+## Magic links (canonical entry from KYA web)
 
-- **Runtime**: `python3` (3.9+, stdlib only — no pip install)
-- **Wallet**: `awp-wallet` CLI on `PATH`. Install from
-  https://github.com/awp-core/awp-wallet (same binary used by awp-skill).
-- **Env**:
+KYA web encodes any user intent as a `kya-sign://...` URL. Always feed
+the URL to `kya-agent open` — let the binary dispatch:
 
-  | Variable | Required | Default | Notes |
-  |---|---|---|---|
-  | `KYA_API_BASE` | no | `https://kya.link` | override for claim / set-recipient |
-  | `KYA_KYC_BASE` | no | `https://kya.link` | override for KYC flow |
-  | `KYA_CHAIN_ID` | no | `8453` | EIP-712 domain `chainId` (Base mainnet) |
-  | `AWP_RELAY_BASE` | no | `https://api.awp.sh` | used by `relay-*` scripts |
-  | `BASE_RPC_URL` | no | `https://mainnet.base.org` | reads `AWPRegistry.nonces(user)` |
-  | `AWP_WALLET_TOKEN` | no | — | only legacy awp-wallet versions need it |
-
-All scripts respect `--api-base` / `--chain-id` / `--token` to override env
-values per invocation.
-
-### Wallet unlock (no manual step needed)
-
-- **Newer `awp-wallet` (≥ v0.17.0)**: no unlock required — scripts just work.
-- **Older / locked `awp-wallet`**: this skill detects the "locked / token
-  required" error from `awp-wallet` and transparently runs
-  `awp-wallet unlock --scope transfer --duration 3600` for the current
-  process, then retries the failing command once. The resulting session
-  token is exported as `AWP_WALLET_TOKEN` for the rest of the run.
-- **Want to reuse an existing token?** Set `AWP_WALLET_TOKEN=<tok>` (or pass
-  `--token <tok>`) before invoking a script — the skill will use it first
-  and only auto-unlock if `awp-wallet` refuses it.
-- **What the skill will NEVER do**: ask for your password, paste a private
-  key, or touch `awp-wallet init` / keystore creation. Unlock happens only
-  via the official `awp-wallet` CLI, which owns the user-facing prompt.
-
-## Scripts
-
-### S1 · Twitter claim end-to-end — `scripts/sign-claim.py`
-
-Signs the two EIP-712 payloads, prints the claim text & X intent URL, takes
-the published tweet URL on stdin (or via `--tweet-url`), submits the claim,
-and polls until active.
-
-```bash
-# Interactive (prints claim text, waits for tweet URL on stdin):
-python3 scripts/sign-claim.py
-
-# Headless (already published the tweet):
-python3 scripts/sign-claim.py \
-  --tweet-url https://x.com/me/status/1234567890 \
-  --no-poll
+```sh
+kya-agent open "kya-sign://reveal?api=https://kya.link&type=email_claim"
 ```
 
-Outputs **JSON** on stdout when finished:
-
-```json
-{
-  "agent_address": "0xabc...",
-  "attestation_id": "att_01J...",
-  "status": "active",
-  "tweet_url": "https://x.com/me/status/1234567890",
-  "metadata": { "twitter_handle": "alice_web3", "tweet_id": "1234567890" }
-}
-```
-
-`stderr` carries human progress (`{"step": "sign.ok", ...}`, `{"info": "..."}`)
-so wrappers can stream live status without parsing the final JSON line.
-
-### S1.5 · Telegram claim end-to-end — `scripts/sign-telegram-claim.py`
-
-Same shape as S1 (Twitter), but for **public Telegram channels** the agent
-owner controls. Signs the two EIP-712 payloads, prints the claim text and a
-Telegram share intent URL, takes the published message URL on stdin (or via
-`--message-url`), submits the claim, and polls until active.
-
-The published message must live in a **public** channel (`https://t.me/<channel>/<msg_id>`).
-KYA does not read private chats — the verifier just fetches the public
-message via the channel's web preview.
-
-```bash
-# Interactive (prints claim text, waits for message URL on stdin):
-python3 scripts/sign-telegram-claim.py
-
-# Headless (already posted the message):
-python3 scripts/sign-telegram-claim.py \
-  --message-url https://t.me/my_agent_channel/42 \
-  --no-poll
-```
-
-Outputs **JSON** on stdout when finished:
-
-```json
-{
-  "agent_address": "0xabc...",
-  "attestation_id": "att_01J...",
-  "status": "active",
-  "message_url": "https://t.me/my_agent_channel/42",
-  "metadata": { "telegram_channel": "my_agent_channel", "message_id": "42" }
-}
-```
-
-`stderr` follows the same `{"step": ..., "info": ...}` format as S1, so the
-same wrapper code can stream both.
-
-### S2 · KYC initiation — `scripts/sign-kyc.py`
-
-Signs `KycInit`, creates a Didit session, prints the verification URL, then
-polls the kyc-service until the session reaches a terminal status (Approved /
-Declined / Abandoned / Expired).
-
-```bash
-python3 scripts/sign-kyc.py --owner 0xowner...
-```
-
-If the user wants to do the Didit selfie + ID step elsewhere (different
-device), pass `--no-poll` so the script just prints the verification URL and
-exits — they can come back to KYA web later to see the final attestation.
-
-### S3 · Single-action signer — `scripts/sign-action.py` **(preferred for wizard dialogs)**
-
-KYA web's `/claim` and `/kyc` wizards throw a `ManualSignatureRequiredError`
-whenever the signer is in `manual` mode. The resulting dialog exposes a
-**Copy prompt** button that embeds every parameter needed to reproduce the
-wizard's typed-data (agent, nonce, timestamp, action — plus `owner` for
-`kyc_init`). The user no longer has to copy a JSON blob; this script
-rebuilds the typed-data from constants in `kya_lib` and asks
-`awp-wallet` to sign it.
-
-```bash
-# Twitter claim step (prepare or claim):
-python3 scripts/sign-action.py \
-  --action twitter_prepare \
-  --chain-id 8453 \
-  --agent 0xabc... \
-  --timestamp 1731000000 \
-  --nonce bfc412331f93ca46e9ab9eae9986d165
-
-# KYC init:
-python3 scripts/sign-action.py \
-  --action kyc_init \
-  --chain-id 8453 \
-  --agent 0xabc... \
-  --owner 0xdef... \
-  --timestamp 1731000000 \
-  --nonce bfc412331f93ca46e9ab9eae9986d165
-```
-
-Outputs only the `0x` signature on stdout (logs on stderr). The user pastes
-it back into KYA web's `03 Paste the 0x signature` field.
-
-### S4 · Generic EIP-712 signer — `scripts/sign.py`
-
-For any one-off KYA payload that doesn't fit S1 / S2 / S3 (e.g. KYA web shows a
-custom typed-data in the manual-sign dialog).
-
-```bash
-# From file:
-python3 scripts/sign.py --from-file typed.json
-
-# From clipboard (user copied the JSON from KYA web):
-python3 scripts/sign.py --from-clipboard
-
-# From stdin (in a pipeline):
-cat typed.json | python3 scripts/sign.py
-```
-
-Prints only the `0x...130hex` signature on stdout — easy to pipe into
-`xsel`, append to a request body, etc.
-
-### S5 · Set reward recipient via AWP relayer — `scripts/relay-set-recipient.py`
-
-Drives the agent side of KYA matchmaking. Two stages, both driven by this one
-script:
-
-1. **Stage 1 (always runs)** — point `AWPRegistry.recipient(agent)` at the
-   KYA-derived deposit address so KYA can identify and split incoming worknet
-   rewards. The agent wallet **never spends gas** — the AWP relayer broadcasts
-   on behalf of the signer.
-2. **Stage 2 (only with `--amount`)** — sign a KYA `Action(delegated_staking_request)`
-   and POST it to `/v1/services/staking/request`. KYA's matching worker then
-   picks a provider and calls `KyaAllocatorProxy.allocate()` so the agent gets
-   backed by N AWP without the owner ever locking funds themselves. Server
-   gates on the agent having at least one active `twitter_claim` or `kyc`
-   attestation; the script pre-checks this so the user sees a clear "go run
-   `sign-claim` or `sign-kyc` first" message instead of a server error string.
-
-```bash
-# Stage 1 only — auto-fetch the deposit address from KYA, then sign & relay:
-python3 scripts/relay-set-recipient.py --worknet 845300000012
-
-# Already know the deposit address (skip KYA lookup):
-python3 scripts/relay-set-recipient.py --recipient 0xdeposit... --no-poll
-
-# Full delegated-staking flow — owner declares 1000 AWP target stake:
-python3 scripts/relay-set-recipient.py --worknet 845300000012 --amount 1000
-```
-
-Outputs `{ agent_address, recipient, tx_hash, relay_response, final_status,
-amount_awp, staking_request }` on stdout (last two are `null` when stage 2 is
-skipped). Live progress (`step` / `info` JSON lines) on stderr.
-
-The `--amount` value is a human-friendly AWP decimal string (e.g. `1000` or
-`12.5`); the script converts it to integer wei before signing so the on-the-wire
-`amount_wei` matches KYA's storage format exactly.
-
-### S6 · Grant delegate to KyaAllocatorProxy — `scripts/relay-grant-delegate.py`
-
-The provider side of matchmaking: authorize `KyaAllocatorProxy` to call
-`allocate` on the provider's behalf. No AWP is moved — only the right to
-manage allocations. The provider wallet does **not** need ETH; the AWP
-relayer pays gas.
-
-```bash
-python3 scripts/relay-grant-delegate.py
-```
-
-`--delegate` defaults to the canonical KyaAllocatorProxy address baked into
-`kya_lib.py`; pass it only if KYA has rotated the proxy.
-
-### S8 · Reveal unredacted attestation metadata — `scripts/sign-reveal.py`
-
-KYA's public `GET /v1/agents/:address/attestations` endpoint masks PII in the
-default response (email is reduced to `e***@gmail.com` + `email_domain`, KYC
-country is dropped) so that anyone holding the address can't enumerate the
-owner's contact details by polling. The owner can recover the plaintext for
-their own agent by signing one EIP-712 `Action(attestation_reveal)` with the
-agent EOA — KYA verifies the signature, consumes the nonce, and returns the
-unredacted metadata for that single response. **Off-chain only**: nothing is
-written, no transaction is broadcast.
-
-```bash
-# Reveal everything KYA knows about the agent (all attestation types):
-python3 scripts/sign-reveal.py
-
-# Reveal only the email plaintext:
-python3 scripts/sign-reveal.py --type email_claim
-
-# Reveal only the KYC entry (so country shows up):
-python3 scripts/sign-reveal.py --type kyc
-
-# Explicit agent override (default reads from awp-wallet):
-python3 scripts/sign-reveal.py --agent 0xabc... --type email_claim
-```
-
-Outputs the full reveal response on stdout:
-
-```json
-{
-  "subject": { "address": "0xabc...", "chain_id": 8453, "did": "did:pkh:..." },
-  "attestations": [
-    {
-      "id": "att_01J...",
-      "type": "email_claim",
-      "status": "active",
-      "metadata": { "email": "alice@example.com", "verified_at": "..." }
-    }
-  ],
-  "total": 1
-}
-```
-
-`stderr` carries the same `step` / `info` JSON lines as the other scripts so
-agents can stream live progress without parsing the JSON body.
-
-### S7 · Email claim end-to-end — `scripts/sign-email.py`
-
-Bind a real inbox to the agent EOA. Two EIP-712 signatures
-(`email_prepare` + `email_confirm`) sandwich a 6-digit verification email
-KYA sends through Resend; the user reads the code, hands it back, the
-script signs the second half and KYA writes the `email_claim` attestation.
-
-Unlike Twitter / Telegram, **no public post is involved** — the email
-itself is the proof — so this script does the entire round-trip without
-handing the user a URL.
-
-```bash
-# Interactive (will prompt for email + code):
-python3 scripts/sign-email.py
-
-# Email pre-supplied, prompt only for code:
-python3 scripts/sign-email.py --email me@example.com
-
-# Fully headless / CI (already know the code):
-python3 scripts/sign-email.py --email me@example.com --code 123456 --no-poll
-```
-
-Outputs **JSON** on stdout when finished:
-
-```json
-{
-  "agent_address": "0xabc...",
-  "attestation_id": "att_01J...",
-  "status": "active",
-  "email": "me@example.com",
-  "timed_out": false
-}
-```
-
-Codes expire after ~10 minutes; 5 wrong attempts invalidate the code (the
-script surfaces those as `[EMAIL_CODE_INVALID]` / `[EMAIL_MAX_ATTEMPTS]`).
-If you got rate-limited (`[EMAIL_RESEND_COOLDOWN]`), wait ~60 s and retry.
-
-## Magic link convention
-
-KYA web encodes the user's intent as `kya-sign://<flow>?<query>`:
-
-| Magic link | Skill action |
+| URL form | Resolves to |
 |---|---|
-| `kya-sign://twitter-claim?api=<base>&chain=8453` | run `sign-claim.py --api-base <base> --chain-id 8453` |
-| `kya-sign://twitter-claim?api=<base>&tweet=<url>` | run `sign-claim.py --api-base <base> --tweet-url <url>` |
-| `kya-sign://telegram-claim?api=<base>&chain=8453` | run `sign-telegram-claim.py --api-base <base> --chain-id 8453` |
-| `kya-sign://telegram-claim?api=<base>&message=<url>` | run `sign-telegram-claim.py --api-base <base> --message-url <url>` |
-| `kya-sign://email-claim?api=<base>` | run `sign-email.py --api-base <base>` (prompts for email + code) |
-| `kya-sign://email-claim?api=<base>&email=<addr>` | run `sign-email.py --api-base <base> --email <addr>` (prompts only for code) |
-| `kya-sign://kyc?api=<base>&owner=0x...` | run `sign-kyc.py --api-base <base> --owner 0x...` |
-| `kya-sign://reveal?api=<base>` | run `sign-reveal.py --api-base <base>` (all types) |
-| `kya-sign://reveal?api=<base>&type=email_claim` | run `sign-reveal.py --api-base <base> --type email_claim` |
-| `kya-sign://reveal?api=<base>&type=kyc` | run `sign-reveal.py --api-base <base> --type kyc` |
-| `kya-sign://sign?clip=1` | run `sign.py --from-clipboard` |
-| `kya-sign://set-recipient?api=<base>&worknet=<id>` | run `relay-set-recipient.py --api-base <base> --worknet <id>` |
-| `kya-sign://set-recipient?recipient=0xdeposit...` | run `relay-set-recipient.py --recipient 0xdeposit...` |
-| `kya-sign://set-recipient?api=<base>&worknet=<id>&amount=<awp>` | run `relay-set-recipient.py --api-base <base> --worknet <id> --amount <awp>` (full stage-1 + stage-2 delegated-staking) |
-| `kya-sign://grant-delegate` | run `relay-grant-delegate.py` |
+| `kya-sign://twitter-claim?api=<base>` | `claim-twitter` (handoff URL) |
+| `kya-sign://twitter-claim?api=<base>&tweet=<url>` | `claim-twitter --tweet-url <url>` |
+| `kya-sign://telegram-claim?api=<base>` | `claim-telegram` |
+| `kya-sign://telegram-claim?api=<base>&message=<url>` | `claim-telegram --message-url <url>` |
+| `kya-sign://email-claim?api=<base>` | `claim-email` (prompts for email + code) |
+| `kya-sign://email-claim?api=<base>&email=<addr>` | `claim-email --email <addr>` |
+| `kya-sign://kyc?api=<base>&owner=0x...` | `kyc --owner 0x...` |
+| `kya-sign://reveal?api=<base>` | `reveal` (all types) |
+| `kya-sign://reveal?api=<base>&type=<t>` | `reveal --type <t>` |
+| `kya-sign://set-recipient?api=<base>&worknet=<id>` | `set-recipient --worknet <id>` |
+| `kya-sign://set-recipient?...&amount=<awp>` | `set-recipient ... --amount <awp>` (full delegated-staking) |
+| `kya-sign://grant-delegate` | `grant-delegate` |
+| `kya-sign://sign?clip=1` | `sign --from-clipboard` |
 
-When the user pastes such a URL in chat, this skill should:
+Use `kya-agent open --dry-run <url>` if the user wants to see the
+dispatched command before it runs.
 
-1. Confirm the action with the user (one short sentence: "About to claim X
-   account for agent `0xabc…` against `https://kya.link`. Proceed?").
-2. Run the matching script with the encoded args.
-3. Stream progress from stderr; report the final stdout JSON line back to
-   the user.
+## Subcommand reference
+
+| Subcommand | Purpose |
+|---|---|
+| `preflight` | Self-check (awp-wallet, KYA reachable, RPC reachable). Run first. |
+| `bootstrap` | First-run alias of `preflight` plus an onboarding hint. |
+| `smoke-test` | Non-destructive probe — never signs, never POSTs. CI-safe. |
+| `open <url>` | Parse `kya-sign://...` and dispatch. Use `--dry-run` to preview. |
+| `claim-twitter` | Sign and submit a Twitter (X) claim. TTY interactive: prompts for tweet URL. Piped: requires `--tweet-url`. |
+| `claim-telegram` | Sign and submit a Telegram public-channel claim. `--message-url https://t.me/<channel>/<msg_id>`. |
+| `claim-email` | Bind an email. Two signs sandwich a 6-digit code. TTY prompts; piped requires `--email --code`. |
+| `kyc` | Sign `KycInit`, create a Didit session, return verification URL, optionally poll until terminal. |
+| `reveal` | Off-chain. Sign `Action(attestation_reveal)`, get unredacted metadata. `--type email_claim/kyc/twitter_claim/telegram_claim/staking`. |
+| `set-recipient` | Stage 1: gasless `AWPRegistry.setRecipient` via relayer. Stage 2 (with `--amount`): KYA `delegated_staking_request`. Pre-checks Social or Human attestation. |
+| `grant-delegate` | Provider side: authorize `KyaAllocatorProxy` to allocate on your behalf, gasless via relayer. |
+| `sign` | Generic EIP-712 signer for ad-hoc KYA / AWPRegistry payloads. `--from-file` / `--from-clipboard` / stdin. |
+| `sign-action` | Single-shot KYA `Action` / `KycInit` signer for the wizard manual-paste UX. |
+
+Every subcommand emits a single-line JSON result on stdout (with
+`_internal.next_action` and optional `_internal.next_command`) and
+streams progress on stderr as NDJSON `step` / `info` lines.
+
+## Error codes → recovery actions
+
+| `error.code` | Action |
+|---|---|
+| `WALLET_NOT_CONFIGURED` | `awp-wallet receive` to check; `awp-wallet init` only if no wallet exists. **Never re-init an existing wallet.** |
+| `WALLET_LOCKED` | Re-run; the binary auto-unlocks. If it still fails: `awp-wallet unlock --scope transfer --duration 3600` and retry. |
+| `AGENT_MISMATCH` | `awp-wallet wallets`, find the right profile, `export AWP_AGENT_ID=<id>` (or pass `--agent-id`), retry. |
+| `TIMESTAMP_OUT_OF_RANGE` / `INVALID_SIGNATURE` | Local clock drift. `sudo sntp -sS time.apple.com` (macOS) / `w32tm /resync` (Windows) / `chronyc makestep` (Linux). Retry. |
+| `EMAIL_INVALID` | Ask the user for a syntactically valid email and re-run. |
+| `EMAIL_CODE_INVALID` | Re-read the inbox and re-run `kya-agent claim-email --email <addr> --code <CODE>`. |
+| `EMAIL_MAX_ATTEMPTS` | 5 wrong codes — restart with a fresh `kya-agent claim-email`. |
+| `EMAIL_RESEND_COOLDOWN` | Wait ~60 s and retry. |
+| `NOT_VERIFIED` | `set-recipient --amount` requires Social or Human first. Run `kya-agent claim-twitter` or `kya-agent kyc`. |
+| `PER_AGENT_CAP_EXCEEDED` | Agent already has ≥10 000 AWP delegated-staked. Cannot stack more. |
+| `NO_CAPACITY` | No provider capacity right now. Surface verbatim — do not retry in a tight loop. |
+| `STAKING_REQUEST_FAILED` | Read `failed_reason` and surface it verbatim. Do not retry blindly. |
+| `RELAY_TX_REVERTED` | Check `tx_hash` on basescan. Usually stale nonce — just re-run; the binary re-reads `AWPRegistry.nonces(agent)`. |
+| `KYA_UNREACHABLE` | `curl $KYA_API_BASE/api/healthz` to sanity-check. |
+| `RPC_UNREACHABLE` | Set `BASE_RPC_URL` to a working endpoint and retry. |
+| `INPUT_REQUIRED` | Non-TTY invocation missing a required flag. Re-run with the flag the message asks for (e.g. `--tweet-url`, `--email`, `--code`). |
+| `MAGIC_LINK_INVALID` | Check the link is `kya-sign://...` and a known flow. |
+
+For any error not in this table, surface `error.message` verbatim to the
+user. Do not retry the same call in a tight loop hoping for a different
+outcome.
+
+## Pitfalls
+
+- **Clock skew is the #1 cause of `INVALID_SIGNATURE`.** KYA accepts ±60 s
+  future / 300 s past. If the user's clock is off, every sign attempt
+  will fail until they resync — re-trying without a resync is futile.
+- **`set-recipient --amount` requires verification first.** The binary
+  pre-checks the agent has an active `twitter_claim` or `kyc` attestation
+  before signing stage 1, so the user sees a clean "go run claim-twitter
+  or kyc first" instead of burning a setRecipient tx that the matching
+  worker would then reject.
+- **`reveal` is off-chain.** It signs an `Action(attestation_reveal)` to
+  authenticate the owner, but KYA writes nothing — only consumes the
+  nonce and returns one unredacted response. Re-run for a fresh view.
+- **Per-agent cap is 10 000 AWP across delegated stakers.** Re-running
+  `set-recipient --amount` won't bypass it; the cap is enforced server-side
+  at match time.
+- **Telegram claim is public-channel only** (`t.me/<channel>/<msg_id>`).
+  KYA fetches the public web preview; private DMs and unlisted groups
+  cannot be verified.
 
 ## Security
 
-- The skill never reads or writes a private key. Signing is delegated to
-  `awp-wallet sign-typed-data`, which prompts the user for confirmation
-  inside the wallet UI (per-wallet behavior).
-- Every typed-data is constructed locally using the published KYA EIP-712
-  schema (`web/lib/eip712.ts`, `api/src/crypto/eip712.ts`); nothing accepts
-  arbitrary `domain.verifyingContract` from the wire.
-- KYA's own backend re-recovers the signer with `viem.recoverTypedDataAddress`
-  on every request, so a forged `agent_address` body claim is rejected
-  before it reaches the database.
-- `nonce` is 16 random bytes from `secrets.token_hex` (CSPRNG), regenerated
-  per signed request, and rejected by KYA if reused for the same agent.
-- `timestamp` is the local `time.time()` in unix seconds; KYA accepts a
-  ±60 s future and 300 s past window. If the user's clock is wildly off,
-  the script will surface `TIMESTAMP_OUT_OF_RANGE`.
-
-## Troubleshooting
-
-| Symptom | Likely cause | Fix |
-|---|---|---|
-| `awp-wallet CLI not found in PATH` | binary not installed | install awp-wallet, restart shell |
-| `[INVALID_SIGNATURE] twitter_prepare: ...` | clock skew | `w32tm /resync` (Windows) / `sudo sntp -sS time.apple.com` |
-| `[AGENT_MISMATCH] ...` | `--agent` differs from the active awp-wallet profile EOA | run `awp-wallet wallets` to find the matching profile id, then `export AWP_AGENT_ID=<id>` (or pass `--agent-id <id>`) and retry. Confirm with `awp-wallet receive` — its output must equal `--agent`. |
-| `KYA API unreachable (...)` | wrong `KYA_API_BASE` / network (defaults to `https://kya.link`) | sanity-check with `curl <base>/api/healthz` |
-| `aborted by user (no tweet URL provided)` | empty stdin in interactive mode | re-run and paste the URL when prompted, or pass `--tweet-url` |
+- `kya-agent` never reads or writes a private key. Signing is delegated
+  to `awp-wallet sign-typed-data`.
+- Two domain shapes are signed — both pinned in `src/eip712.rs`:
+  - `domain.name = "KYA"`, `primaryType ∈ {Action, KycInit}` — off-chain.
+  - `domain.name = "AWPRegistry"`, `primaryType ∈ {SetRecipient, GrantDelegate}` —
+    POSTed to AWP relayer; relayer broadcasts on Base.
+- The binary never broadcasts a transaction itself. Network egress is
+  limited to the configured KYA, relay, and RPC endpoints.
+- Source: https://github.com/GhostClaw-dev/kya-skill — MIT, public.
+  Releases are built from a tagged commit via GitHub Actions; the
+  SHA256 of each binary is published in the release notes.
