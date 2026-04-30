@@ -348,6 +348,13 @@ After confirmation:
 kya-agent set-recipient --amount <N>
 ```
 
+For this full delegated-staking path, `kya-agent` intentionally fetches
+the KYA deposit address without `worknet_id`. The `--amount` value is
+carried only in Stage 2 (`delegated_staking_request`). Do not add
+`--worknet`: the legacy deposit-address `worknet_id` path means "enter
+awaiting_match" and can trigger the fixed admission-threshold allocation
+instead of the owner's requested amount.
+
 The binary re-checks verification (defense-in-depth — the server gates
 on this too) and, if green, runs both stages and polls for terminal
 status.
@@ -472,6 +479,11 @@ outcome.
 - **Per-agent cap is 10 000 AWP across delegated stakers.** Re-running
   `set-recipient --amount` won't bypass it; the cap is enforced server-side
   at match time.
+- **Don't pass `--worknet` with `set-recipient --amount`.** The binary
+  already defaults to KYA's own worknet for Stage 2. Passing worknet into
+  the deposit-address lookup is the old awaiting-match signal and can make
+  the system allocate the fixed 1,000 AWP threshold rather than the amount
+  the owner requested.
 - **Telegram claim is public-channel only** (`t.me/<channel>/<msg_id>`).
   KYA fetches the public web preview; private DMs and unlisted groups
   cannot be verified.

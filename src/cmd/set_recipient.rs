@@ -37,8 +37,24 @@ pub fn run(ctx: &Ctx, args: Args) -> Result<()> {
     let agent = resolve_agent(ctx, &args.agent)?;
     output::step("agent.resolved", json!({ "agent": &agent }));
 
+    let amount_awp_norm: Option<String> = if args.amount.is_empty() {
+        None
+    } else {
+        Some(validate_amount(&args.amount)?)
+    };
+    if amount_awp_norm.is_some() {
+        output::step(
+            "amount.resolved",
+            json!({ "amount_awp": amount_awp_norm.as_deref() }),
+        );
+        // Eligibility precheck.
+        let via = ensure_verified(&ctx.api_base, &agent)?;
+        output::step("agent.verified", json!({ "via": via.join(",") }));
+    }
+
     let recipient = if args.recipient.is_empty() {
-        let payload = client::deposit_address(&ctx.api_base, &agent, &args.worknet)?;
+        let deposit_worknet = deposit_lookup_worknet(amount_awp_norm.as_deref(), &args.worknet);
+        let payload = client::deposit_address(&ctx.api_base, &agent, deposit_worknet)?;
         let r = payload
             .get("deposit_address")
             .and_then(|x| x.as_str())
@@ -59,18 +75,6 @@ pub fn run(ctx: &Ctx, args: Args) -> Result<()> {
             "source": if args.recipient.is_empty() { "kya" } else { "flag" },
         }),
     );
-
-    let amount_awp_norm: Option<String> = if args.amount.is_empty() {
-        None
-    } else {
-        Some(validate_amount(&args.amount)?)
-    };
-    if amount_awp_norm.is_some() {
-        output::step("amount.resolved", json!({ "amount_awp": amount_awp_norm }));
-        // Eligibility precheck.
-        let via = ensure_verified(&ctx.api_base, &agent)?;
-        output::step("agent.verified", json!({ "via": via.join(",") }));
-    }
 
     // Stage 1 — sign + relay setRecipient.
     //
@@ -291,6 +295,22 @@ fn validate_amount(raw: &str) -> Result<String> {
     Ok(s.to_string())
 }
 
+/// The old deposit-address `?worknet_id=` path is a legacy signal that puts
+/// the agent into `awaiting_match`; matching then allocates the worknet
+/// admissionThreshold (1,000 AWP on KYA self worknet) regardless of `--amount`.
+/// Owner-driven delegated staking carries worknet in Stage 2, so Stage 1 must
+/// fetch only the deposit address when `--amount` is present.
+fn deposit_lookup_worknet<'a>(
+    amount_awp_norm: Option<&str>,
+    worknet: &'a str,
+) -> &'a str {
+    if amount_awp_norm.is_some() {
+        ""
+    } else {
+        worknet
+    }
+}
+
 fn ensure_verified(api_base: &str, agent: &str) -> Result<Vec<String>> {
     let payload = client::list_attestations(api_base, agent, None)?;
     let items = payload
@@ -401,5 +421,26 @@ fn amount_awp_norm_into_value(raw: &str) -> serde_json::Value {
         json!(null)
     } else {
         json!(raw.trim())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deposit_lookup_omits_worknet_for_owner_driven_amount_flow() {
+        assert_eq!(
+            deposit_lookup_worknet(Some("8000"), DEFAULT_KYA_WORKNET_ID),
+            "",
+        );
+    }
+
+    #[test]
+    fn deposit_lookup_keeps_worknet_for_legacy_stage1_only_flow() {
+        assert_eq!(
+            deposit_lookup_worknet(None, DEFAULT_KYA_WORKNET_ID),
+            DEFAULT_KYA_WORKNET_ID,
+        );
     }
 }
