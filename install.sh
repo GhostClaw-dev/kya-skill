@@ -22,6 +22,20 @@ case "${ARCH}" in
   *)              echo "Error: unsupported architecture: ${ARCH}" >&2; exit 1 ;;
 esac
 
+# Intel Mac (x86_64-apple-darwin) is not in the prebuilt matrix —
+# macos-13 GitHub runners are too slow / queued for reliable releases,
+# and the awp / kya user base is overwhelmingly Linux-in-Docker plus
+# Apple Silicon Macs. Surface a clean message instead of 404'ing on the
+# release artifact lookup.
+if [ "${OS_NAME}" = "darwin" ] && [ "${ARCH_NAME}" = "x86_64" ]; then
+  echo "Error: prebuilt kya-agent for Intel Mac (x86_64) is not published." >&2
+  echo "" >&2
+  echo "Build it locally with Rust:" >&2
+  echo "  cargo install --git https://github.com/${REPO}" >&2
+  echo "Or run from inside Docker (Linux x86_64 image works on Intel Mac too)." >&2
+  exit 1
+fi
+
 # Linux x86_64 prefers musl (static) build — avoids glibc version skew.
 if [ "${OS_NAME}" = "linux" ] && [ "${ARCH_NAME}" = "x86_64" ]; then
   ASSET="kya-agent-linux-x86_64-musl"

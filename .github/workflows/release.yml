@@ -27,10 +27,13 @@ jobs:
             target: aarch64-unknown-linux-musl
             asset: kya-agent-linux-aarch64-musl
             cross: true
-          - os: macos-13
-            target: x86_64-apple-darwin
-            asset: kya-agent-darwin-x86_64
-            cross: false
+          # x86_64-apple-darwin (Intel Mac) intentionally NOT in the
+          # matrix. macos-13 runners stall ~15-20 min on this build per
+          # repeated CI runs, and the awp / kya user base is dominated by
+          # Linux-in-Docker plus Apple Silicon Macs. Intel Mac users can
+          # `cargo install --git https://github.com/GhostClaw-dev/kya-skill`
+          # locally (Rust toolchain required) — install.sh surfaces a
+          # clear message pointing them there.
           - os: macos-14
             target: aarch64-apple-darwin
             asset: kya-agent-darwin-aarch64
