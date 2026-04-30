@@ -140,6 +140,67 @@ pub fn awp_is_registered(user_address: &str) -> Result<bool> {
     Ok(last_byte != 0)
 }
 
+/// Read `AWPRegistry.recipient(addr)` — returns the configured reward
+/// recipient address, or all zeros if never set.
+///
+/// Selector(`recipient(address)`) = 0xb3651eea.
+pub fn awp_get_recipient(user_address: &str) -> Result<String> {
+    let user = validate_address(user_address, "user")?;
+    let selector = "0xb3651eea";
+    let mut data = String::with_capacity(74);
+    data.push_str(selector);
+    let stripped = user.trim_start_matches("0x");
+    for _ in 0..(64 - stripped.len()) {
+        data.push('0');
+    }
+    data.push_str(stripped);
+
+    let body = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "eth_call",
+        "params": [{ "to": AWP_REGISTRY_ADDRESS, "data": data }, "latest"],
+    });
+    let url = resolve_rpc_url();
+    let resp = http()
+        .post(&url)
+        .json(&body)
+        .timeout(Duration::from_secs(15))
+        .send()
+        .map_err(|e| {
+            KyaError::new(
+                ErrorKind::RpcUnreachable,
+                format!("Base RPC unreachable ({url}): {e}"),
+            )
+        })?;
+    let v: Value = resp.json().map_err(|e| {
+        KyaError::new(
+            ErrorKind::RpcUnreachable,
+            format!("Base RPC returned non-JSON: {e}"),
+        )
+    })?;
+    if let Some(err) = v.get("error") {
+        return Err(KyaError::new(
+            ErrorKind::RpcUnreachable,
+            format!("AWPRegistry.recipient revert: {err}"),
+        ));
+    }
+    let result = v
+        .get("result")
+        .and_then(|x| x.as_str())
+        .unwrap_or_default();
+    if !result.starts_with("0x") || result.len() < 66 {
+        return Err(KyaError::new(
+            ErrorKind::RpcUnreachable,
+            format!("AWPRegistry.recipient malformed result: {result:?}"),
+        ));
+    }
+    // Address is right-aligned in 32-byte word: take the last 40 hex chars.
+    let trimmed = result.trim_start_matches("0x");
+    let addr_hex = &trimmed[trimmed.len() - 40..];
+    Ok(format!("0x{}", addr_hex.to_lowercase()))
+}
+
 pub fn ping() -> Result<()> {
     let body = json!({
         "jsonrpc": "2.0",

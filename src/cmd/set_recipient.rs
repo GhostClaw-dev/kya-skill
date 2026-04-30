@@ -73,44 +73,70 @@ pub fn run(ctx: &Ctx, args: Args) -> Result<()> {
     }
 
     // Stage 1 — sign + relay setRecipient.
-    let nonce = rpc::registry_nonce(&agent)?;
-    let deadline = now_unix_seconds() + args.deadline_seconds.max(60);
-    let typed = build_set_recipient_typed_data(
-        &agent,
-        &recipient,
-        nonce,
-        deadline,
-        ctx.chain_id,
-    )?;
-    output::step(
-        "eip712.built",
-        json!({ "primary_type": typed["primaryType"], "deadline": deadline }),
-    );
-    let signature = wallet::sign_typed_data(&typed, &ctx.token)?;
-    validate_signature(&signature)?;
-    output::step("eip712.signed", json!({}));
+    //
+    // Skip the relay submission entirely when the on-chain recipient is
+    // already the target. AWPRegistry.setRecipient reverts on no-op
+    // (require new != current), and re-signing + re-broadcasting won't
+    // change that — we just burn a signature and confuse the user. This
+    // is the dominant case for "add more AWP to an already-staked agent":
+    // recipient was set on the first round, only stage 2 needs to run
+    // again.
+    let current_recipient = rpc::awp_get_recipient(&agent).unwrap_or_default();
+    let already_set = !current_recipient.is_empty()
+        && current_recipient.eq_ignore_ascii_case(&recipient);
 
-    let res = relay::set_recipient(ctx.chain_id, &agent, &recipient, deadline, &signature)?;
-    let tx_hash = res
-        .get("txHash")
-        .or_else(|| res.get("tx_hash"))
-        .and_then(|x| x.as_str())
-        .map(String::from);
-    output::step(
-        "relay.submitted",
-        json!({ "tx_hash": &tx_hash, "status": res.get("status") }),
-    );
-
-    let final_status = if let (Some(tx), false) = (&tx_hash, args.no_poll) {
-        Some(poll_relay(
-            tx,
-            Duration::from_secs(3),
-            Duration::from_secs(90),
-        )?)
+    let (tx_hash, final_status, res) = if already_set {
+        output::step(
+            "stage1.skipped",
+            json!({
+                "reason": "recipient_already_set",
+                "current_recipient": &current_recipient,
+                "target_recipient": &recipient,
+                "note": "AWPRegistry.setRecipient reverts on no-op; skipping the relay tx and going straight to stage 2."
+            }),
+        );
+        (None, None, serde_json::json!(null))
     } else {
-        None
+        let nonce = rpc::registry_nonce(&agent)?;
+        let deadline = now_unix_seconds() + args.deadline_seconds.max(60);
+        let typed = build_set_recipient_typed_data(
+            &agent,
+            &recipient,
+            nonce,
+            deadline,
+            ctx.chain_id,
+        )?;
+        output::step(
+            "eip712.built",
+            json!({ "primary_type": typed["primaryType"], "deadline": deadline }),
+        );
+        let signature = wallet::sign_typed_data(&typed, &ctx.token)?;
+        validate_signature(&signature)?;
+        output::step("eip712.signed", json!({}));
+
+        let res = relay::set_recipient(ctx.chain_id, &agent, &recipient, deadline, &signature)?;
+        let tx_hash = res
+            .get("txHash")
+            .or_else(|| res.get("tx_hash"))
+            .and_then(|x| x.as_str())
+            .map(String::from);
+        output::step(
+            "relay.submitted",
+            json!({ "tx_hash": &tx_hash, "status": res.get("status") }),
+        );
+
+        let final_status = if let (Some(tx), false) = (&tx_hash, args.no_poll) {
+            Some(poll_relay(
+                tx,
+                Duration::from_secs(3),
+                Duration::from_secs(90),
+            )?)
+        } else {
+            None
+        };
+        output::info("relay set-recipient done", json!({ "tx_hash": &tx_hash }));
+        (tx_hash, final_status, res)
     };
-    output::info("relay set-recipient done", json!({ "tx_hash": &tx_hash }));
 
     let mut staking_request: Option<serde_json::Value> = None;
 
