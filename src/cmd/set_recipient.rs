@@ -189,6 +189,34 @@ pub fn run(ctx: &Ctx, args: Args) -> Result<()> {
         }
     }
 
+    // Decide terminal vs pending. Per KYA's design the pool stakes
+    // immediately on submit (no matching). If we polled to the timeout
+    // and the request is still `queued`, that's a known server-side
+    // anomaly the dev team is actively chasing — surface it to the
+    // calling agent as `staking_pending` with a non-error code so the
+    // owner is told *what to do* (wait, re-check via staking-status)
+    // instead of being lied to with `ready`.
+    let final_req_status = staking_request
+        .as_ref()
+        .and_then(|w| w.get("request"))
+        .and_then(|r| r.get("status"))
+        .and_then(|s| s.as_str())
+        .unwrap_or("")
+        .to_string();
+    let stage2_attempted = !args.amount.is_empty();
+    let stage2_terminal = matches!(
+        final_req_status.as_str(),
+        "matched" | "no_capacity" | "failed"
+    );
+    let stage2_pending = stage2_attempted && !stage2_terminal && !args.no_poll_staking;
+
+    let request_id = staking_request
+        .as_ref()
+        .and_then(|w| w.get("request"))
+        .and_then(|r| r.get("id"))
+        .and_then(|s| s.as_str())
+        .map(String::from);
+
     let body = json!({
         "agent_address": &agent,
         "recipient": &recipient,
@@ -198,7 +226,24 @@ pub fn run(ctx: &Ctx, args: Args) -> Result<()> {
         "amount_awp": amount_awp_norm_into_value(args.amount.as_str()),
         "staking_request": staking_request,
     });
-    output::ok(body, "ready", None);
+
+    if stage2_pending {
+        let next_cmd = match request_id.as_deref() {
+            Some(id) => format!("kya-agent staking-status --request-id {id}"),
+            None => "kya-agent staking-status".to_string(),
+        };
+        let extras = json!({
+            "anomaly": {
+                "code": "STAKING_PENDING",
+                "request_id": request_id,
+                "request_status": final_req_status,
+                "message": "Stage 1 (setRecipient) confirmed on-chain; KYA's pool stake (stage 2) is still queued past the post-submit timeout. Per KYA's design the stake should land immediately — `queued` means a server-side issue (the dev team is investigating). Tell the owner: stake will land later automatically; re-check via the next_command. Do NOT re-run `kya-agent set-recipient` — it would post a duplicate request."
+            }
+        });
+        output::ok_extra(body, "staking_pending", Some(&next_cmd), Some(extras));
+    } else {
+        output::ok(body, "ready", None);
+    }
     Ok(())
 }
 

@@ -23,6 +23,7 @@ pub mod set_recipient;
 pub mod sign;
 pub mod sign_action;
 pub mod smoke_test;
+pub mod staking_status;
 
 /// Shared context derived from global flags. Subcommands consume by reference.
 pub struct Ctx {

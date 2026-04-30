@@ -229,9 +229,10 @@ status.
 
 | `_internal.next_action` | Action |
 |---|---|
-| `matched` | Report `matched_provider` and `matched_allocation_id`. Done. |
-| `no_capacity` | **[STOP]**: tell owner no provider has free capacity right now. Surface verbatim — do not retry in a tight loop. |
+| `ready` | Stage 1 + stage 2 both landed cleanly. Report `tx_hash` and `staking_request.request.matched_allocation_id` to the owner. Done. |
+| `staking_pending` | Stage 1 confirmed; KYA's pool stake didn't land before the timeout. **[STOP]**: tell owner the stake will land later automatically (server-side issue, not theirs to fix), and that re-running `kya-agent set-recipient` would post a duplicate. Re-check later with the suggested next_command (`kya-agent staking-status --request-id <id>`). |
 | terminal `failed` with `failed_reason: per_agent_cap_exceeded` | **[STOP]**: this agent already has ≥10 000 AWP delegated-staked. Cannot stack more. |
+| `no_capacity` | **[STOP]**: tell owner no provider has free capacity right now. Surface verbatim — do not retry in a tight loop. |
 | terminal `failed` (other) | **[STOP]**: surface `failed_reason` verbatim. |
 
 For repeat / additive delegated staking (same agent, more AWP) or new
@@ -294,6 +295,7 @@ dispatched command before it runs.
 | `kyc` | Sign `KycInit`, create a Didit session, return verification URL, optionally poll until terminal. |
 | `reveal` | Off-chain. Sign `Action(attestation_reveal)`, get unredacted metadata. `--type email_claim/kyc/twitter_claim/telegram_claim/staking`. |
 | `set-recipient` | Stage 1: gasless `AWPRegistry.setRecipient` via relayer. Stage 2 (with `--amount`): KYA `delegated_staking_request`. Pre-checks Social or Human attestation. |
+| `staking-status` | Re-check a delegated-staking request's status (use after `set-recipient` returns `staking_pending`). |
 | `grant-delegate` | Provider side: authorize `KyaAllocatorProxy` to allocate on your behalf, gasless via relayer. |
 | `sign` | Generic EIP-712 signer for ad-hoc KYA / AWPRegistry payloads. `--from-file` / `--from-clipboard` / stdin. |
 | `sign-action` | Single-shot KYA `Action` / `KycInit` signer for the wizard manual-paste UX. |

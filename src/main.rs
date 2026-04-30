@@ -70,6 +70,8 @@ enum Command {
     Attestations(cmd::attestations::Args),
     /// AWPRegistry.setRecipient via AWP relayer (+ optional delegated-staking request).
     SetRecipient(cmd::set_recipient::Args),
+    /// Re-check delegated-staking request status (post-timeout, manual re-poll).
+    StakingStatus(cmd::staking_status::Args),
     /// AWPRegistry.grantDelegate(KyaAllocatorProxy) via AWP relayer.
     GrantDelegate(cmd::grant_delegate::Args),
     /// Generic EIP-712 signer (file / clipboard / stdin).
@@ -99,6 +101,7 @@ fn main() {
         Command::Reveal(a) => cmd::reveal::run(&ctx, a),
         Command::Attestations(a) => cmd::attestations::run(&ctx, a),
         Command::SetRecipient(a) => cmd::set_recipient::run(&ctx, a),
+        Command::StakingStatus(a) => cmd::staking_status::run(&ctx, a),
         Command::GrantDelegate(a) => cmd::grant_delegate::run(&ctx, a),
         Command::Sign(a) => cmd::sign::run(&ctx, a),
         Command::SignAction(a) => cmd::sign_action::run(&ctx, a),
